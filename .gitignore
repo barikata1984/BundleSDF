@@ -139,5 +139,6 @@ dmypy.json
 # Datasets
 data/
 logs/
+BundleTrack/HO3D_v3/
 !BundleTrack/XMem/inference/data
 run_used.yml

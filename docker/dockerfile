@@ -243,7 +243,7 @@ RUN apt-get remove -y python3-blinker || true && \
     pip3 install --upgrade pip setuptools wheel && \
     pip3 install torch==2.6.0 torchvision==0.21.0 torchaudio && \
     pip3 install --no-cache-dir kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu124.html && \
-    pip3 install "git+https://github.com/facebookresearch/pytorch3d.git@stable" && \
+    pip3 install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable" && \
     pip3 install --break-system-packages --force-reinstall blinker && \
     pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab ninja "Cython>=0.29.37" yacs && \
     pip3 install scipy scikit-learn
