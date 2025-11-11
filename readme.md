@@ -54,6 +54,14 @@ cd docker && bash run_container.sh
 bash build.sh
 ```
 
+- (Optional) In my setup, or if setting up this application as of 20251101 or later, I had to run the following command additionally (cf. https://github.com/NVlabs/BundleSDF/issues/197)
+```
+python setup.py build_ext --inplace
+
+# Or
+python3 setup.py build_ext --inplace
+```
+
 # Run on your custom data
 - Prepare your RGBD video folder as below (also refer to the example milk data). You can find an [example milk data here](https://drive.google.com/file/d/1akutk_Vay5zJRMr3hVzZ7s69GT4gxuWN/view?usp=share_link) for testing.
 ```
