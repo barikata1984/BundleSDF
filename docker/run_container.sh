@@ -13,6 +13,7 @@ echo "DIR to be mounted: $DIR"
 docker run --name bundlesdf \
   --interactive \
   --tty \
+  --network=host \
   --gpus all \
   --env NVIDIA_DISABLE_REQUIRE=1 \
   --env GIT_INDEX_FILE \
@@ -25,5 +26,5 @@ docker run --name bundlesdf \
   --volume /mnt:/mnt \
   --volume $DIR:$DIR \
   --volume ~/.Xauthority:/root/.Xauthority:rw \
-  nvcr.io/nvidian/bundlesdf:latest \
+  prebuilt-bundlesdf:latest \
   bash
