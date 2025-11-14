@@ -48,7 +48,7 @@ docker build --network host -t nvcr.io/nvidian/bundlesdf .
 
 - Start a docker container the first time
 ```
-cd docker && bash run_container.sh
+cd docker && bash run_container_for_the_first_time.sh
 
 # Inside docker container, compile the packages which are machine dependent
 bash build.sh
@@ -60,6 +60,22 @@ python setup.py build_ext --inplace
 
 # Or
 python3 setup.py build_ext --inplace
+```
+
+# Commit the build container as an image
+Building a container everytime is time consuming and tedious. So, it is recommended to make an image of the container that has been built. To make it, you need to exit the container like
+```
+root@HOSTNAME:~/BundleSDF# exit
+```
+Then
+```
+docker commit bundlesdf prebuilt-bundlesdf
+```
+
+# Run the container
+Call the following command to run the prebuilt container
+```
+bash run_container.sh
 ```
 
 # Run on your custom data
