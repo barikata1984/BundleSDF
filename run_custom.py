@@ -10,15 +10,36 @@
 from bundlesdf import *
 import argparse
 import os,sys
+import time
+import csv
+import statistics
 code_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(code_dir)
 from segmentation_utils import Segmenter
 
 
-def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False):
+# GPU sync helper (no-op if torch not available)
+try:
+  import torch
+  def gpu_sync():
+    if torch.cuda.is_available():
+      torch.cuda.synchronize()
+except Exception:
+  def gpu_sync():
+    return
+  
+
+def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False, measure_timing=True):
   set_seed(0)
 
   os.system(f'rm -rf {out_folder} && mkdir -p {out_folder}')
+
+  # CSV file to store per-frame timings
+  if measure_timing:
+    timings_csv = os.path.join(out_folder, 'per_frame_timings.csv')
+    timings_fp = open(timings_csv, 'w', newline='')
+    timings_writer = csv.writer(timings_fp)
+    timings_writer.writerow(['frame_idx', 'id_str', 't_io', 't_resize_prep', 't_segmentation', 't_erode_mask', 't_tracker_run', 't_total', 'fps', 'ts_start', 'ts_end'])
 
   cfg_bundletrack = yaml.load(open(f"{code_dir}/BundleTrack/config_ho3d.yml",'r'))
   cfg_bundletrack['SPDLOG'] = int(args.debug_level)
@@ -68,8 +89,22 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
 
   reader = YcbineoatReader(video_dir=video_dir, shorter_side=480)
 
+  total_times = []
+  tracker_times = []
+  io_times = []
+  prep_times = []
+  seg_times = []
+  erode_times = []
+
+  # warmup frames to skip in statistics (to ignore initialization jit)
+  skip_first_n = 2
 
   for i in range(0,len(reader.color_files),args.stride):
+    frame_start_wall = time.perf_counter()
+    ts_start = time.time()
+
+    # ---------- I/O読み込み/リサイズ ----------
+    t0 = time.perf_counter()
     color_file = reader.color_files[i]
     color = cv2.imread(color_file)
     H0, W0 = color.shape[:2]
@@ -77,6 +112,16 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
     H,W = depth.shape[:2]
     color = cv2.resize(color, (W,H), interpolation=cv2.INTER_NEAREST)
     depth = cv2.resize(depth, (W,H), interpolation=cv2.INTER_NEAREST)
+    
+    t_io = time.perf_counter() - t0
+
+    # ---------- 前処理（プレースホルダ） ----------
+    t1 = time.perf_counter()
+    # (placeholder for any extra preprocessing)
+    t_prep = time.perf_counter() - t1
+
+    # ---------- マスク / セグメンテーション ----------
+    t2 = time.perf_counter()
 
     if i==0:
       mask = reader.get_mask(0)
@@ -89,19 +134,64 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
       else:
         mask = reader.get_mask(i)
         mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
+        
+    t_seg = time.perf_counter() - t2
+
+    # ---------- マスクのエロージョン ----------
+    t3 = time.perf_counter()
 
     if cfg_bundletrack['erode_mask']>0:
       kernel = np.ones((cfg_bundletrack['erode_mask'], cfg_bundletrack['erode_mask']), np.uint8)
       mask = cv2.erode(mask.astype(np.uint8), kernel)
+      
+    t_erode = time.perf_counter() - t3
 
     id_str = reader.id_strs[i]
     pose_in_model = np.eye(4)
 
     K = reader.K.copy()
 
+    # ---------- tracker.run の計測（GPU 同期を含める） ----------
+    gpu_sync()
+    t4 = time.perf_counter()
     tracker.run(color, depth, K, id_str, mask=mask, occ_mask=None, pose_in_model=pose_in_model)
+    gpu_sync()
+    t_tracker = time.perf_counter() - t4
+
+    frame_total = time.perf_counter() - frame_start_wall
+    ts_end = time.time()
+    fps = 1.0 / frame_total if frame_total > 0 else float('inf')
+
+    # skip warm-up frames in stats if desired
+    if i >= skip_first_n:
+      total_times.append(frame_total)
+      tracker_times.append(t_tracker)
+      io_times.append(t_io)
+      prep_times.append(t_prep)
+      seg_times.append(t_seg)
+      erode_times.append(t_erode)
+
+    if measure_timing:
+      timings_writer.writerow([i, id_str, f"{t_io:.6f}", f"{t_prep:.6f}", f"{t_seg:.6f}", f"{t_erode:.6f}", f"{t_tracker:.6f}", f"{frame_total:.6f}", f"{fps:.3f}", f"{ts_start:.6f}", f"{ts_end:.6f}"])
+      timings_fp.flush()
+
+    if (len(total_times) % 10) == 0 and len(total_times)>0:
+      logging.info(f"Frame {i} processed. last_frame_time={frame_total:.3f}s fps={fps:.2f} mean_fps={1.0/statistics.mean(total_times):.2f}")
 
   tracker.on_finish()
+
+  if measure_timing:
+    timings_fp.close()
+
+  # summary
+  if len(total_times) > 0:
+    print("\nPer-frame timing summary:")
+    print(f"Frames measured: {len(total_times)}")
+    print(f"Total mean time: {statistics.mean(total_times):.4f}s median: {statistics.median(total_times):.4f}s mean FPS: {1.0/statistics.mean(total_times):.2f}")
+    print(f"Tracker mean time: {statistics.mean(tracker_times):.4f}s")
+    print(f"I/O mean time: {statistics.mean(io_times):.4f}s")
+    print(f"Segmentation mean time: {statistics.mean(seg_times):.4f}s")
+    print(f"Erode mean time: {statistics.mean(erode_times):.4f}s")
 
   run_one_video_global_nerf(out_folder=out_folder)
 
@@ -110,7 +200,7 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
 def run_one_video_global_nerf(out_folder='/home/bowen/debug/bundlesdf_scan_coffee_415'):
   set_seed(0)
 
-  out_folder += '/'   #!NOTE there has to be a / in the end
+  #out_folder += '/'   #!NOTE there has to be a / in the end
 
   cfg_bundletrack = yaml.load(open(f"{out_folder}/config_bundletrack.yml",'r'))
   cfg_bundletrack['debug_dir'] = out_folder
