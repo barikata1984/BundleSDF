@@ -474,6 +474,108 @@ class BundleSdf:
     self.K = None
     self.mesh = None
 
+  def _atomic_write_array4x4(self, arr4x4, path):
+    """
+    原子的に 4x4 行列をテキストで書き出すユーティリティ。
+    - 既にファイルが存在する場合は上書きしない（呼び出し側でチェックする）。
+    """
+    tmp = path + ".tmp"
+    try:
+      np.savetxt(tmp, arr4x4.reshape(4,4))
+      os.replace(tmp, path)
+      return True
+    except Exception as e:
+      logging.exception(f"atomic write failed for {path}: {e}")
+      try:
+        if os.path.exists(tmp):
+          os.remove(tmp)
+      except:
+        pass
+      return False
+
+  def _ensure_frame_outputs_fallback(self, frame):
+    """
+    saveNewframeResult() で通常出力されるはずのファイルが見つからない場合に
+    最低限必要なもの（ob_in_cam/{id}.txt, {frame_id}/keyframes.yml）を作る。
+    既にファイルが存在する場合は何もしない（上書きしない）。
+    """
+    debug_dir = self.debug_dir
+    frame_id = frame._id_str
+    ob_dir = os.path.join(debug_dir, "ob_in_cam")
+    os.makedirs(ob_dir, exist_ok=True)
+
+    # 1) ob_in_cam file (ob_in_cam/{frame_id}.txt)
+    ob_file = os.path.join(ob_dir, f"{frame_id}.txt")
+    if not os.path.exists(ob_file):
+      try:
+        ob_in_cam = np.linalg.inv(frame._pose_in_model)
+        ok = self._atomic_write_array4x4(ob_in_cam, ob_file)
+        if ok:
+          logging.info(f"Fallback: wrote ob_in_cam for {frame_id} -> {ob_file} (created_by=fallback_python)")
+        else:
+          logging.warning(f"Fallback: failed to write ob_in_cam for {frame_id}")
+      except Exception:
+        logging.exception(f"Fallback: exception while writing ob_in_cam for {frame_id}")
+    else:
+      logging.debug(f"ob_in_cam exists, skip fallback for {ob_file}")
+
+    # 2) keyframes.yml in the frame dir (only create if not exists)
+    frame_dir = os.path.join(debug_dir, frame_id)
+    os.makedirs(frame_dir, exist_ok=True)
+    keyfile = os.path.join(frame_dir, "keyframes.yml")
+    if not os.path.exists(keyfile):
+      try:
+        node = {}
+        # Mirror the Bundler::saveNewframeResult format: keyframe_{id_str} -> cam_in_ob
+        for i_kf, kf in enumerate(self.bundler._keyframes):
+          # convert pose to list of 16 floats row-major to match YAML used elsewhere
+          data = []
+          mat = np.array(kf._pose_in_model)
+          for h in range(4):
+            for w in range(4):
+              data.append(float(mat[h, w]))
+          node[f"keyframe_{kf._id_str}".replace("'", "")] = {"cam_in_ob": data}
+        # atomic write YAML
+        tmp_k = keyfile + ".tmp"
+        with open(tmp_k, "w") as ff:
+          yaml.dump(node, ff)
+        os.replace(tmp_k, keyfile)
+        logging.info(f"Fallback: wrote keyframes.yml to {keyfile} (created_by=fallback_python)")
+      except Exception:
+        logging.exception(f"Fallback: failed to write keyframes.yml for frame {frame_id}")
+    else:
+      logging.debug(f"keyframes.yml exists, skip fallback for {keyfile}")
+
+    # -------------------------
+    # 1) process_new_frame 内 => saveNewframeResult() 呼び出し直後に挿入するコード例
+    # bundlesdf.py の process_new_frame 内で、既に self.bundler.saveNewframeResult() を呼んでいる箇所の直後に次を入れてください。
+    # -------------------------
+    # after: self.bundler.saveNewframeResult()
+    try:
+      # 迅速な確認: frame_dir と ob_in_cam の状態をログ出力（最初に少しだけ）
+      frame_dir = f"{self.debug_dir}/{frame._id_str}"
+      logging.info(f"Called saveNewframeResult for {frame._id_str}, checking produced files...")
+      # list a few files if any
+      try:
+        sample_files = sorted(glob.glob(f"{frame_dir}/*"))[:20]
+        logging.debug(f"Files in {frame_dir}: {sample_files}")
+      except Exception:
+        logging.debug("Could not list frame_dir contents for debugging")
+
+      # If ob_in_cam entry is missing for this frame, create fallback (do not overwrite existing)
+      ob_file = os.path.join(self.debug_dir, "ob_in_cam", f"{frame._id_str}.txt")
+      if not os.path.exists(ob_file):
+        logging.warning(f"ob_in_cam entry missing for {frame._id_str}. Creating fallback.")
+        # create fallback minimal outputs
+        try:
+          self._ensure_frame_outputs_fallback(frame)
+        except Exception:
+          logging.exception("Exception in fallback ensure_frame_outputs_fallback after saveNewframeResult")
+      else:
+        logging.debug(f"ob_in_cam present for {frame._id_str}, no fallback needed")
+
+    except Exception:
+      logging.exception("Error while performing post-save fallback checks")
 
   def on_finish(self):
     if self.use_gui:
@@ -484,13 +586,29 @@ class BundleSdf:
     with self.lock:
       self.p_dict['join'] = True
     self.p_nerf.join()
+    
     with self.lock:
       if self.p_dict['running']==False and 'optimized_cvcam_in_obs' in self.p_dict:
         for i_f in range(len(self.p_dict['optimized_cvcam_in_obs'])):
           self.bundler._keyframes[i_f]._pose_in_model = self.p_dict['optimized_cvcam_in_obs'][i_f]
           self.bundler._keyframes[i_f]._nerfed = True
         del self.p_dict['optimized_cvcam_in_obs']
-
+        
+        # ここで ob_in_cam をチェックし、空なら bundler._keyframes から作成（存在するファイルはスキップ）
+    try:
+      ob_files = sorted(glob.glob(f"{self.debug_dir}/ob_in_cam/*"))
+      if len(ob_files) == 0:
+        logging.warning(f"No ob_in_cam files found under {self.debug_dir}/ob_in_cam; creating fallback from bundler._keyframes")
+        for kf in self.bundler._keyframes:
+          # reuse helper to create per-keyframe fallback outputs (skips if exists)
+          try:
+            self._ensure_frame_outputs_fallback(kf)
+          except Exception:
+            logging.exception(f"Failed to fallback-create outputs for keyframe {kf._id_str}")
+      else:
+        logging.info(f"Found {len(ob_files)} ob_in_cam files under {self.debug_dir}/ob_in_cam")
+    except Exception:
+      logging.exception("Error while verifying/creating ob_in_cam fallback in on_finish")
 
   def make_frame(self, color, depth, K, id_str, mask=None, occ_mask=None, pose_in_model=np.eye(4)):
     H,W = color.shape[:2]
@@ -603,7 +721,7 @@ class BundleSdf:
       visibles = np.array(visibles)
       ids = np.argsort(visibles)[::-1]
       found = False
-      pdb.set_trace()
+      
       for id in ids:
         kf = self.bundler._keyframes[id]
         logging.info(f"trying new ref frame {kf._id_str}")
@@ -786,17 +904,45 @@ class BundleSdf:
         self.gui_dict['K'] = self.K
         self.gui_dict['n_keyframe'] = len(self.bundler._keyframes)
 
-
-
   def run_global_nerf(self, reader=None, get_texture=False, tex_res=1024):
     '''
     @reader: data reader, sometimes we want to use the full resolution raw image
     '''
     self.K = np.loadtxt(f'{self.debug_dir}/cam_K.txt').reshape(3,3)
 
+    # Robust discovery of last_stamp: prefer ob_in_cam/*.txt, fall back to keyframes.yml,
+    # poses_before_nerf.txt, or latest frame directory by mtime.
     tmp = sorted(glob.glob(f"{self.debug_dir}/ob_in_cam/*"))
-    last_stamp = os.path.basename(tmp[-1]).replace('.txt','')
-    logging.info(f'last_stamp {last_stamp}')
+    if len(tmp) == 0:
+      logging.warning(f"No files found in {self.debug_dir}/ob_in_cam/. Attempting fallback discovery.")
+      # Try to find a recent frame directory that contains keyframes.yml or poses_before_nerf.txt
+      cand_keyfiles = sorted(glob.glob(f"{self.debug_dir}/*/keyframes.yml"))
+      cand_posefiles = sorted(glob.glob(f"{self.debug_dir}/*/poses_before_nerf.txt"))
+      if len(cand_keyfiles) > 0:
+        last_frame_dir = os.path.dirname(cand_keyfiles[-1])
+        last_stamp = os.path.basename(last_frame_dir)
+        logging.info(f"Fallback: using last_stamp {last_stamp} from {cand_keyfiles[-1]}")
+      elif len(cand_posefiles) > 0:
+        last_frame_dir = os.path.dirname(cand_posefiles[-1])
+        last_stamp = os.path.basename(last_frame_dir)
+        logging.info(f"Fallback: using last_stamp {last_stamp} from {cand_posefiles[-1]}")
+      else:
+        # as last resort choose most recent frame dir by mtime (but prefer ones that have some outputs)
+        cand_dirs = [p for p in glob.glob(f"{self.debug_dir}/*") if os.path.isdir(p)]
+        if len(cand_dirs) > 0:
+          cand_dirs_sorted = sorted(cand_dirs, key=lambda p: os.path.getmtime(p))
+          last_stamp = os.path.basename(cand_dirs_sorted[-1])
+          logging.warning(f"No keyframes.yml or poses_before_nerf found; fallback to latest frame dir {last_stamp}")
+        else:
+          # Nothing found — give informative error and abort
+          logging.error(f"No ob_in_cam files and no frame-level keyfiles found under {self.debug_dir}. Directory listing:")
+          for p in sorted(glob.glob(f"{self.debug_dir}/*")):
+            logging.error(f" - {p}")
+          raise RuntimeError(f"No ob_in_cam files and no frame keyfiles found under {self.debug_dir}. Aborting run_global_nerf.")
+    else:
+      last_stamp = os.path.basename(tmp[-1]).replace('.txt','')
+      logging.info(f'last_stamp {last_stamp}')
+
     keyframes = yaml.load(open(f'{self.debug_dir}/{last_stamp}/keyframes.yml','r'))
     logging.info(f"keyframes#: {len(keyframes)}")
     keys = list(keyframes.keys())
@@ -824,6 +970,7 @@ class BundleSdf:
     normal_maps = []
     masks = []
     occ_masks = []
+    
     for frame_id in frame_ids:
       if reader is not None:
         self.K = reader.K.copy()
@@ -854,7 +1001,16 @@ class BundleSdf:
       self.cfg_nerf['sc_factor'] = float(tmp['sc_factor'])
       self.cfg_nerf['translation'] = np.array(tmp['translation'])
 
-    sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(None,glcam_in_obs,self.K,use_mask=True,base_dir=self.cfg_nerf['save_dir'],rgbs=np.array(rgbs),depths=np.array(depths),masks=np.array(masks), cluster=True, eps=0.01, min_samples=5, sc_factor=self.cfg_nerf['sc_factor'], translation_cvcam=self.cfg_nerf['translation'])
+    sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(
+      None,
+      glcam_in_obs,
+      self.K,
+      use_mask=True,
+      base_dir=self.cfg_nerf['save_dir'],
+      rgbs=np.array(rgbs),
+      depths=np.array(depths),
+      masks=np.array(masks),
+    )
 
     self.cfg_nerf['sc_factor'] = float(sc_factor)
     self.cfg_nerf['translation'] = translation
@@ -865,7 +1021,15 @@ class BundleSdf:
       normal_maps = None
 
     rgbs_raw = np.array(rgbs).copy()
-    rgbs,depths,masks,normal_maps,poses = preprocess_data(np.array(rgbs),depths=np.array(depths),masks=np.array(masks),normal_maps=normal_maps,poses=glcam_in_obs,sc_factor=self.cfg_nerf['sc_factor'],translation=self.cfg_nerf['translation'])
+    rgbs,depths,masks,normal_maps,poses = preprocess_data(
+      np.array(rgbs),
+      np.array(depths),
+      np.array(masks),
+      normal_maps=normal_maps,
+      poses=glcam_in_obs,
+      sc_factor=self.cfg_nerf.get('sc_factor', None),
+      translation=self.cfg_nerf.get('translation', None)
+    )
 
     self.cfg_nerf['sampled_frame_ids'] = np.arange(len(rgbs))
 
@@ -876,12 +1040,31 @@ class BundleSdf:
     else:
       occ_masks = None
 
-    nerf = NerfRunner(self.cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=self.K,build_octree_pcd=pcd_normalized)
+    nerf = NerfRunner(
+      self.cfg_nerf,
+      rgbs,
+      depths=depths,
+      masks=masks,
+      normal_maps=normal_maps,
+      occ_masks=occ_masks,
+      poses=poses,
+      K=self.K,
+      build_octree_pcd=pcd_normalized,
+    )
+    
     print("Start training")
+    
     nerf.train()
-    optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],self.cfg_nerf['sc_factor'],self.cfg_nerf['translation'])
+    
+    optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(
+      poses,
+      nerf.models['pose_array'],
+      self.cfg_nerf['sc_factor'],
+      self.cfg_nerf['translation'],
+    )
 
     ####### Log
+    # TODO: the cp below fails; fix it
     os.system(f"cp -r {self.cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
     with open(f"{out_dir}/config.yml",'w') as ff:
       tmp = copy.deepcopy(self.cfg_nerf)
@@ -898,8 +1081,9 @@ class BundleSdf:
 
     # mesh_files = sorted(glob.glob(f"{self.debug_dir}/final/nerf/step_*_mesh_normalized_space.obj"))
     # mesh = trimesh.load(mesh_files[-1])
-
+    
     mesh,sigma,query_pts = nerf.extract_mesh(voxel_size=self.cfg_nerf['mesh_resolution'],isolevel=0, return_sigma=True)
+    
     mesh.merge_vertices()
     ms = trimesh_split(mesh, min_edge=100)
     largest_size = 0
@@ -919,9 +1103,6 @@ class BundleSdf:
 
     mesh = mesh_to_real_world(mesh, pose_offset=offset, translation=self.cfg_nerf['translation'], sc_factor=self.cfg_nerf['sc_factor'])
     mesh.export(f'{self.debug_dir}/textured_mesh.obj')
-
-
-
 
 
 if __name__=="__main__":
