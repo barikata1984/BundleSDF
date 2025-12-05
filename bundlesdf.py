@@ -211,7 +211,7 @@ def run_gui(gui_dict, gui_lock):
 
 
 
-def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, start_nerf_keyframes, use_gui, gui_lock, gui_dict, debug_dir):
+def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, start_nerf_keyframes, use_gui, gui_lock, gui_dict, debug_dir, timing_buffer, log_lock):
   vox_res = 0.01
   nerf_num_frames = 0
   cnt_nerf = -1
@@ -375,8 +375,30 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
         nerf = NerfRunner(cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=K,build_octree_pcd=pcd_normalized)
 
     logging.info(f"Start training, latest nerf frame {frame_id}")
+    t_nerf_start = time.time()
     nerf.train()
+    t_nerf_end = time.time()
+    nerf_ms = (t_nerf_end - t_nerf_start) * 1000.0
     logging.info(f"Training done, latest nerf frame {frame_id}")
+
+    # Write timing stats for processed frames
+    # Note: nerf.train() processes multiple frames if accumulated, but here we associate the cost 
+    # mainly to the latest frame_id which triggered the training, or we could split it.
+    # For simplicity and matching the trigger event, we assign the time to the current frame_id.
+    # If previous frames are in buffer, we should flush them too.
+    
+    with log_lock:
+      # Check if current frame is in buffer (it should be if it was a keyframe)
+      if frame_id in timing_buffer:
+        data = timing_buffer.pop(frame_id)
+        total_ms = data['fm_ms'] + data['ba_ms'] + nerf_ms
+        with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
+          f.write(f"{data['timestamp']},{frame_id},{total_ms:.1f},{data['fm_ms']:.1f},{data['ba_ms']:.1f},{nerf_ms:.1f}\n")
+      else:
+        # Fallback if frame_id not in buffer (e.g. restart or logic gap), just log NeRF time
+        # timestamp is now
+        with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
+          f.write(f"{time.time()},{frame_id},{nerf_ms:.1f},n/a,n/a,{nerf_ms:.1f}\n")
 
     optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
 
@@ -457,7 +479,18 @@ class BundleSdf:
     self.p_dict['nerf_num_frames'] = 0
 
     self.p_dict['SPDLOG'] = self.SPDLOG
-    self.p_nerf = multiprocessing.Process(target=run_nerf, args=(self.p_dict, self.kf_to_nerf_list, self.lock, self.cfg_nerf, self.translation, self.sc_factor, start_nerf_keyframes, self.use_gui, self.gui_lock, self.gui_dict, self.debug_dir))
+
+    # Shared dictionary for timing stats buffer (frame_id -> {timestamp, fm_ms, ba_ms})
+    self.timing_buffer = self.manager.dict()
+    # Lock for CSV file writing
+    self.log_lock = multiprocessing.Lock()
+    
+    # Initialize CSV file
+    self.timing_csv_path = os.path.join(self.debug_dir, 'timing_stats.csv')
+    with open(self.timing_csv_path, 'w') as f:
+      f.write("timestamp,frame_id,total_ms,feat_match_ms,bundle_adjust_ms,nerf_ms\n")
+
+    self.p_nerf = multiprocessing.Process(target=run_nerf, args=(self.p_dict, self.kf_to_nerf_list, self.lock, self.cfg_nerf, self.translation, self.sc_factor, start_nerf_keyframes, self.use_gui, self.gui_lock, self.gui_dict, self.debug_dir, self.timing_buffer, self.log_lock))
     self.p_nerf.start()
 
     # self.p_dict = {}
@@ -662,121 +695,159 @@ class BundleSdf:
 
 
   def process_new_frame(self, frame):
-    logging.info(f"process frame {frame._id_str}")
+    t_start_timestamp = time.time()
+    t_fm_total = 0.0
+    t_ba = 0.0
+    
+    try:
+      logging.info(f"process frame {frame._id_str}")
 
-    self.bundler._newframe = frame
-    os.makedirs(self.debug_dir, exist_ok=True)
+      self.bundler._newframe = frame
+      os.makedirs(self.debug_dir, exist_ok=True)
 
-    if frame._id>0:
-      ref_frame = self.bundler._frames[list(self.bundler._frames.keys())[-1]]
-      frame._ref_frame_id = ref_frame._id
-      frame._pose_in_model = ref_frame._pose_in_model
-    else:
-      self.bundler._firstframe = frame
+      if frame._id>0:
+        ref_frame = self.bundler._frames[list(self.bundler._frames.keys())[-1]]
+        frame._ref_frame_id = ref_frame._id
+        frame._pose_in_model = ref_frame._pose_in_model
+      else:
+        self.bundler._firstframe = frame
 
-    frame.invalidatePixelsByMask(frame._fg_mask)
-    if frame._id==0 and np.abs(np.array(frame._pose_in_model)-np.eye(4)).max()<=1e-4:
-      frame.setNewInitCoordinate()
+      frame.invalidatePixelsByMask(frame._fg_mask)
+      if frame._id==0 and np.abs(np.array(frame._pose_in_model)-np.eye(4)).max()<=1e-4:
+        frame.setNewInitCoordinate()
 
 
-    n_fg = (np.array(frame._fg_mask)>0).sum()
-    if n_fg<100:
-      logging.info(f"Frame {frame._id_str} cloud is empty, marked FAIL, roi={n_fg}")
-      frame._status = my_cpp.Frame.FAIL;
-      self.bundler.forgetFrame(frame)
-      return
-
-    if self.cfg_track["depth_processing"]["denoise_cloud"]:
-      frame.pointCloudDenoise()
-
-    n_valid = frame.countValidPoints()
-    n_valid_first = self.bundler._firstframe.countValidPoints()
-    if n_valid<n_valid_first/40.0:
-      logging.info(f"frame _cloud_down points#: {n_valid} too small compared to first frame points# {n_valid_first}, mark as FAIL")
-      frame._status = my_cpp.Frame.FAIL
-      self.bundler.forgetFrame(frame)
-      return
-
-    if frame._id==0:
-      self.bundler.checkAndAddKeyframe(frame)   # First frame is always keyframe
-      self.bundler._frames[frame._id] = frame
-      return
-
-    min_match_with_ref = self.cfg_track["feature_corres"]["min_match_with_ref"]
-
-    self.find_corres([(frame, ref_frame)])
-    matches = self.bundler._fm._matches[(frame, ref_frame)]
-
-    if frame._status==my_cpp.Frame.FAIL:
-      logging.info(f"find corres fail, mark {frame._id_str} as FAIL")
-      self.bundler.forgetFrame(frame)
-      return
-
-    matches = self.bundler._fm._matches[(frame, ref_frame)]
-    if len(matches)<min_match_with_ref:
-      visibles = []
-      for kf in self.bundler._keyframes:
-        visible = my_cpp.computeCovisibility(frame, kf)
-        visibles.append(visible)
-      visibles = np.array(visibles)
-      ids = np.argsort(visibles)[::-1]
-      found = False
-      
-      for id in ids:
-        kf = self.bundler._keyframes[id]
-        logging.info(f"trying new ref frame {kf._id_str}")
-        ref_frame = kf
-        frame._ref_frame_id = kf._id
-        frame._pose_in_model = kf._pose_in_model
-        self.find_corres([(frame, ref_frame)])
-
-        # self.bundler._fm.findCorres(frame, ref_frame)
-
-        if len(self.bundler._fm._matches[(frame,kf)])>=min_match_with_ref:
-          logging.info(f"re-choose new ref frame to {kf._id_str}")
-          found = True
-          break
-
-      if not found:
-        frame._status = my_cpp.Frame.FAIL
-        logging.info(f"frame {frame._id_str} has not suitable ref_frame, mark as FAIL")
+      n_fg = (np.array(frame._fg_mask)>0).sum()
+      if n_fg<100:
+        logging.info(f"Frame {frame._id_str} cloud is empty, marked FAIL, roi={n_fg}")
+        frame._status = my_cpp.Frame.FAIL;
         self.bundler.forgetFrame(frame)
         return
 
-    logging.info(f"frame {frame._id_str} pose update before\n{frame._pose_in_model.round(3)}")
-    offset = self.bundler._fm.procrustesByCorrespondence(frame, ref_frame)
-    frame._pose_in_model = offset@frame._pose_in_model
-    logging.info(f"frame {frame._id_str} pose update after\n{frame._pose_in_model.round(3)}")
+      if self.cfg_track["depth_processing"]["denoise_cloud"]:
+        frame.pointCloudDenoise()
 
-    window_size = self.cfg_track["bundle"]["window_size"]
-    if len(self.bundler._frames)-len(self.bundler._keyframes)>window_size:
-      for k in self.bundler._frames:
-        f = self.bundler._frames[k]
-        isforget = self.bundler.forgetFrame(f)
-        if isforget:
-          logging.info(f"exceed window size, forget frame {f._id_str}")
-          break
+      n_valid = frame.countValidPoints()
+      n_valid_first = self.bundler._firstframe.countValidPoints()
+      if n_valid<n_valid_first/40.0:
+        logging.info(f"frame _cloud_down points#: {n_valid} too small compared to first frame points# {n_valid_first}, mark as FAIL")
+        frame._status = my_cpp.Frame.FAIL
+        self.bundler.forgetFrame(frame)
+        return
 
-    self.bundler._frames[frame._id] = frame
+      if frame._id==0:
+        self.bundler.checkAndAddKeyframe(frame)   # First frame is always keyframe
+        self.bundler._frames[frame._id] = frame
+        return
 
-    self.bundler.selectKeyFramesForBA()
+      min_match_with_ref = self.cfg_track["feature_corres"]["min_match_with_ref"]
 
-    local_frames = self.bundler._local_frames
+      t0 = time.time()
+      self.find_corres([(frame, ref_frame)])
+      t_fm_total += (time.time() - t0) * 1000.0
+      matches = self.bundler._fm._matches[(frame, ref_frame)]
 
-    pairs = self.bundler.getFeatureMatchPairs(self.bundler._local_frames)
-    self.find_corres(pairs)
-    if frame._status==my_cpp.Frame.FAIL:
-      self.bundler.forgetFrame(frame)
-      return
+      if frame._status==my_cpp.Frame.FAIL:
+        logging.info(f"find corres fail, mark {frame._id_str} as FAIL")
+        self.bundler.forgetFrame(frame)
+        return
 
-    find_matches = False
-    self.bundler.optimizeGPU(local_frames, find_matches)
+      matches = self.bundler._fm._matches[(frame, ref_frame)]
+      if len(matches)<min_match_with_ref:
+        visibles = []
+        for kf in self.bundler._keyframes:
+          visible = my_cpp.computeCovisibility(frame, kf)
+          visibles.append(visible)
+        visibles = np.array(visibles)
+        ids = np.argsort(visibles)[::-1]
+        found = False
+        
+        for id in ids:
+          kf = self.bundler._keyframes[id]
+          logging.info(f"trying new ref frame {kf._id_str}")
+          ref_frame = kf
+          frame._ref_frame_id = kf._id
+          frame._pose_in_model = kf._pose_in_model
+          t0 = time.time()
+          self.find_corres([(frame, ref_frame)])
+          t_fm_total += (time.time() - t0) * 1000.0
 
-    if frame._status==my_cpp.Frame.FAIL:
-      self.bundler.forgetFrame(frame)
-      return
+          # self.bundler._fm.findCorres(frame, ref_frame)
 
-    self.bundler.checkAndAddKeyframe(frame)
+          if len(self.bundler._fm._matches[(frame,kf)])>=min_match_with_ref:
+            logging.info(f"re-choose new ref frame to {kf._id_str}")
+            found = True
+            break
+
+        if not found:
+          frame._status = my_cpp.Frame.FAIL
+          logging.info(f"frame {frame._id_str} has not suitable ref_frame, mark as FAIL")
+          self.bundler.forgetFrame(frame)
+          return
+
+      logging.info(f"frame {frame._id_str} pose update before\n{frame._pose_in_model.round(3)}")
+      offset = self.bundler._fm.procrustesByCorrespondence(frame, ref_frame)
+      frame._pose_in_model = offset@frame._pose_in_model
+      logging.info(f"frame {frame._id_str} pose update after\n{frame._pose_in_model.round(3)}")
+
+      window_size = self.cfg_track["bundle"]["window_size"]
+      if len(self.bundler._frames)-len(self.bundler._keyframes)>window_size:
+        for k in self.bundler._frames:
+          f = self.bundler._frames[k]
+          isforget = self.bundler.forgetFrame(f)
+          if isforget:
+            logging.info(f"exceed window size, forget frame {f._id_str}")
+            break
+
+      self.bundler._frames[frame._id] = frame
+
+      self.bundler.selectKeyFramesForBA()
+
+      local_frames = self.bundler._local_frames
+
+      pairs = self.bundler.getFeatureMatchPairs(self.bundler._local_frames)
+      t0 = time.time()
+      self.find_corres(pairs)
+      t_fm_total += (time.time() - t0) * 1000.0
+      if frame._status==my_cpp.Frame.FAIL:
+        self.bundler.forgetFrame(frame)
+        return
+
+      find_matches = False
+      t0 = time.time()
+      self.bundler.optimizeGPU(local_frames, find_matches)
+      t_ba = (time.time() - t0) * 1000.0
+
+      if frame._status==my_cpp.Frame.FAIL:
+        self.bundler.forgetFrame(frame)
+        return
+
+      self.bundler.checkAndAddKeyframe(frame)
+    
+    finally:
+      # Record timing stats
+      # If it's a keyframe AND not failed, it will be sent to NeRF, so we buffer the stats.
+      # If not, we write immediately with NeRF time as n/a (0).
+      
+      # Check if frame is in keyframes list (it might have been removed if failed)
+      is_keyframe = False
+      if frame._status != my_cpp.Frame.FAIL:
+        for kf in self.bundler._keyframes:
+          if kf == frame:
+            is_keyframe = True
+            break
+      
+      if is_keyframe:
+        self.timing_buffer[frame._id_str] = {
+          'timestamp': t_start_timestamp,
+          'fm_ms': t_fm_total,
+          'ba_ms': t_ba
+        }
+      else:
+        with self.log_lock:
+          total_ms = t_fm_total + t_ba
+          with open(self.timing_csv_path, 'a') as f:
+            f.write(f"{t_start_timestamp},{frame._id_str},{total_ms:.1f},{t_fm_total:.1f},{t_ba:.1f},n/a\n")
 
 
 
@@ -903,7 +974,7 @@ class BundleSdf:
         self.gui_dict['id_str'] = frame._id_str
         self.gui_dict['K'] = self.K
         self.gui_dict['n_keyframe'] = len(self.bundler._keyframes)
-
+        
   def run_global_nerf(self, reader=None, get_texture=False, tex_res=1024):
     '''
     @reader: data reader, sometimes we want to use the full resolution raw image
