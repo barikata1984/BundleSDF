@@ -211,7 +211,7 @@ def run_gui(gui_dict, gui_lock):
 
 
 
-def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, start_nerf_keyframes, use_gui, gui_lock, gui_dict, debug_dir, timing_buffer, log_lock):
+def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, start_nerf_keyframes, use_gui, gui_lock, gui_dict, debug_dir, timing_buffer, log_lock, enable_timing_log):
   vox_res = 0.01
   nerf_num_frames = 0
   cnt_nerf = -1
@@ -387,18 +387,19 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
     # For simplicity and matching the trigger event, we assign the time to the current frame_id.
     # If previous frames are in buffer, we should flush them too.
     
-    with log_lock:
-      # Check if current frame is in buffer (it should be if it was a keyframe)
-      if frame_id in timing_buffer:
-        data = timing_buffer.pop(frame_id)
-        total_ms = data['fm_ms'] + data['ba_ms'] + nerf_ms
-        with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-          f.write(f"{data['timestamp']},{frame_id},{total_ms:.1f},{data['fm_ms']:.1f},{data['ba_ms']:.1f},{nerf_ms:.1f}\n")
-      else:
-        # Fallback if frame_id not in buffer (e.g. restart or logic gap), just log NeRF time
-        # timestamp is now
-        with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-          f.write(f"{time.time()},{frame_id},{nerf_ms:.1f},n/a,n/a,{nerf_ms:.1f}\n")
+    if enable_timing_log:
+      with log_lock:
+        # Check if current frame is in buffer (it should be if it was a keyframe)
+        if frame_id in timing_buffer:
+          data = timing_buffer.pop(frame_id)
+          total_ms = data['fm_ms'] + data['ba_ms'] + nerf_ms
+          with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
+            f.write(f"{data['timestamp']},{frame_id},{total_ms:.1f},{data['fm_ms']:.1f},{data['ba_ms']:.1f},{nerf_ms:.1f}\n")
+        else:
+          # Fallback if frame_id not in buffer (e.g. restart or logic gap), just log NeRF time
+          # timestamp is now
+          with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
+            f.write(f"{time.time()},{frame_id},{nerf_ms:.1f},n/a,n/a,{nerf_ms:.1f}\n")
 
     optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
 
@@ -487,10 +488,18 @@ class BundleSdf:
     
     # Initialize CSV file
     self.timing_csv_path = os.path.join(self.debug_dir, 'timing_stats.csv')
-    with open(self.timing_csv_path, 'w') as f:
-      f.write("timestamp,frame_id,total_ms,feat_match_ms,bundle_adjust_ms,nerf_ms\n")
+    
+    # Only enable timing log if the file does not exist (i.e., first run / real-time tracking)
+    # If file exists, it means we are in global refinement stage, so disable logging to preserve real-time stats.
+    if not os.path.exists(self.timing_csv_path):
+      self.enable_timing_log = True
+      with open(self.timing_csv_path, 'w') as f:
+        f.write("timestamp,frame_id,total_ms,feat_match_ms,bundle_adjust_ms,nerf_ms\n")
+    else:
+      self.enable_timing_log = False
+      logging.info("timing_stats.csv exists, disabling timing log for this run (likely global refinement)")
 
-    self.p_nerf = multiprocessing.Process(target=run_nerf, args=(self.p_dict, self.kf_to_nerf_list, self.lock, self.cfg_nerf, self.translation, self.sc_factor, start_nerf_keyframes, self.use_gui, self.gui_lock, self.gui_dict, self.debug_dir, self.timing_buffer, self.log_lock))
+    self.p_nerf = multiprocessing.Process(target=run_nerf, args=(self.p_dict, self.kf_to_nerf_list, self.lock, self.cfg_nerf, self.translation, self.sc_factor, start_nerf_keyframes, self.use_gui, self.gui_lock, self.gui_dict, self.debug_dir, self.timing_buffer, self.log_lock, self.enable_timing_log))
     self.p_nerf.start()
 
     # self.p_dict = {}
@@ -829,25 +838,26 @@ class BundleSdf:
       # If it's a keyframe AND not failed, it will be sent to NeRF, so we buffer the stats.
       # If not, we write immediately with NeRF time as n/a (0).
       
-      # Check if frame is in keyframes list (it might have been removed if failed)
-      is_keyframe = False
-      if frame._status != my_cpp.Frame.FAIL:
-        for kf in self.bundler._keyframes:
-          if kf == frame:
-            is_keyframe = True
-            break
-      
-      if is_keyframe:
-        self.timing_buffer[frame._id_str] = {
-          'timestamp': t_start_timestamp,
-          'fm_ms': t_fm_total,
-          'ba_ms': t_ba
-        }
-      else:
-        with self.log_lock:
-          total_ms = t_fm_total + t_ba
-          with open(self.timing_csv_path, 'a') as f:
-            f.write(f"{t_start_timestamp},{frame._id_str},{total_ms:.1f},{t_fm_total:.1f},{t_ba:.1f},n/a\n")
+      if self.enable_timing_log:
+        # Check if frame is in keyframes list (it might have been removed if failed)
+        is_keyframe = False
+        if frame._status != my_cpp.Frame.FAIL:
+          for kf in self.bundler._keyframes:
+            if kf == frame:
+              is_keyframe = True
+              break
+        
+        if is_keyframe:
+          self.timing_buffer[frame._id_str] = {
+            'timestamp': t_start_timestamp,
+            'fm_ms': t_fm_total,
+            'ba_ms': t_ba
+          }
+        else:
+          with self.log_lock:
+            total_ms = t_fm_total + t_ba
+            with open(self.timing_csv_path, 'a') as f:
+              f.write(f"{t_start_timestamp},{frame._id_str},{total_ms:.1f},{t_fm_total:.1f},{t_ba:.1f},n/a\n")
 
 
 
