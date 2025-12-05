@@ -394,14 +394,14 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
         # Check if current frame is in buffer (it should be if it was a keyframe)
         if frame_id in timing_buffer:
           data = timing_buffer.pop(frame_id)
-          total_ms = data['fm_ms'] + data['ba_ms'] + nerf_ms
+          # total_ms, others_ms are already in data
           with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-            f.write(f"{data['timestamp']},{frame_id},{total_ms:.1f},{data['fm_ms']:.1f},{data['ba_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
+            f.write(f"{data['timestamp']},{frame_id},{data['total_ms']:.1f},{data['fm_prep_ms']:.1f},{data['fm_2d_match_ms']:.1f},{data['fm_corres_ms']:.1f},{data['fm_ransac_ms']:.1f},{data['ba_ms']:.1f},{data['others_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
         else:
           # Fallback if frame_id not in buffer (e.g. restart or logic gap), just log NeRF time
           # timestamp is now
           with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-            f.write(f"{time.time()},{frame_id},{nerf_ms:.1f},n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
+            f.write(f"{time.time()},{frame_id},n/a,n/a,n/a,n/a,n/a,n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
 
     optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
 
@@ -496,7 +496,7 @@ class BundleSdf:
     if not os.path.exists(self.timing_csv_path):
       self.enable_timing_log = True
       with open(self.timing_csv_path, 'w') as f:
-        f.write("timestamp,frame_id,total_ms,feat_match_ms,bundle_adjust_ms,nerf_ms,nerf_n_frames,nerf_ms_per_frame\n")
+        f.write("timestamp,frame_id,total_ms,fm_prep_ms,fm_2d_match_ms,fm_corres_ms,fm_ransac_ms,bundle_adjust_ms,others_ms,nerf_ms,nerf_n_frames,nerf_ms_per_frame\n")
     else:
       self.enable_timing_log = False
       logging.info("timing_stats.csv exists, disabling timing log for this run (likely global refinement)")
@@ -667,15 +667,23 @@ class BundleSdf:
 
 
   def find_corres(self, frame_pairs):
+    t_prep = 0.0
+    t_2d = 0.0
+    t_corres = 0.0
+    t_ransac = 0.0
+
     logging.info(f"frame_pairs: {len(frame_pairs)}")
     is_match_ref = len(frame_pairs)==1 and frame_pairs[0][0]._ref_frame_id==frame_pairs[0][1]._id and self.bundler._newframe==frame_pairs[0][0]
 
+    t0 = time.time()
     imgs, tfs, query_pairs = self.bundler._fm.getProcessedImagePairs(frame_pairs)
     imgs = np.array([np.array(img) for img in imgs])
+    t_prep = (time.time() - t0) * 1000.0
 
     if len(query_pairs)==0:
-      return
+      return t_prep, t_2d, t_corres, t_ransac
 
+    t0 = time.time()
     corres = self.loftr.predict(rgbAs=imgs[::2], rgbBs=imgs[1::2])
     for i_pair in range(len(query_pairs)):
       cur_corres = corres[i_pair][:,:4]
@@ -684,6 +692,7 @@ class BundleSdf:
       cur_corres[:,:2] = transform_pts(cur_corres[:,:2], np.linalg.inv(tfA))
       cur_corres[:,2:4] = transform_pts(cur_corres[:,2:4], np.linalg.inv(tfB))
       self.bundler._fm._raw_matches[query_pairs[i_pair]] = cur_corres.round().astype(np.uint16)
+    t_2d = (time.time() - t0) * 1000.0
 
     min_match_with_ref = self.cfg_track["feature_corres"]["min_match_with_ref"]
 
@@ -691,23 +700,32 @@ class BundleSdf:
       self.bundler._fm._raw_matches[frame_pairs[0]] = []
       self.bundler._newframe._status = my_cpp.Frame.FAIL
       logging.info(f'frame {self.bundler._newframe._id_str} mark FAIL, due to no matching')
-      return
+      return t_prep, t_2d, t_corres, t_ransac
 
+    t0 = time.time()
     self.bundler._fm.rawMatchesToCorres(query_pairs)
+    t_corres = (time.time() - t0) * 1000.0
 
     for pair in query_pairs:
       self.bundler._fm.vizCorresBetween(pair[0], pair[1], 'before_ransac')
 
+    t0 = time.time()
     self.bundler._fm.runRansacMultiPairGPU(query_pairs)
+    t_ransac = (time.time() - t0) * 1000.0
 
     for pair in query_pairs:
       self.bundler._fm.vizCorresBetween(pair[0], pair[1], 'after_ransac')
+      
+    return t_prep, t_2d, t_corres, t_ransac
 
 
 
   def process_new_frame(self, frame):
-    t_start_timestamp = time.time()
-    t_fm_total = 0.0
+    # t_start_timestamp = time.time()
+    t_fm_prep = 0.0
+    t_fm_2d = 0.0
+    t_fm_corres = 0.0
+    t_fm_ransac = 0.0
     t_ba = 0.0
     
     try:
@@ -733,7 +751,7 @@ class BundleSdf:
         logging.info(f"Frame {frame._id_str} cloud is empty, marked FAIL, roi={n_fg}")
         frame._status = my_cpp.Frame.FAIL;
         self.bundler.forgetFrame(frame)
-        return
+        return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       if self.cfg_track["depth_processing"]["denoise_cloud"]:
         frame.pointCloudDenoise()
@@ -744,24 +762,27 @@ class BundleSdf:
         logging.info(f"frame _cloud_down points#: {n_valid} too small compared to first frame points# {n_valid_first}, mark as FAIL")
         frame._status = my_cpp.Frame.FAIL
         self.bundler.forgetFrame(frame)
-        return
+        return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       if frame._id==0:
         self.bundler.checkAndAddKeyframe(frame)   # First frame is always keyframe
         self.bundler._frames[frame._id] = frame
-        return
+        return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       min_match_with_ref = self.cfg_track["feature_corres"]["min_match_with_ref"]
 
-      t0 = time.time()
-      self.find_corres([(frame, ref_frame)])
-      t_fm_total += (time.time() - t0) * 1000.0
+      tp, t2, tc, tr = self.find_corres([(frame, ref_frame)])
+      t_fm_prep += tp
+      t_fm_2d += t2
+      t_fm_corres += tc
+      t_fm_ransac += tr
+      
       matches = self.bundler._fm._matches[(frame, ref_frame)]
 
       if frame._status==my_cpp.Frame.FAIL:
         logging.info(f"find corres fail, mark {frame._id_str} as FAIL")
         self.bundler.forgetFrame(frame)
-        return
+        return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       matches = self.bundler._fm._matches[(frame, ref_frame)]
       if len(matches)<min_match_with_ref:
@@ -779,9 +800,12 @@ class BundleSdf:
           ref_frame = kf
           frame._ref_frame_id = kf._id
           frame._pose_in_model = kf._pose_in_model
-          t0 = time.time()
-          self.find_corres([(frame, ref_frame)])
-          t_fm_total += (time.time() - t0) * 1000.0
+          
+          tp, t2, tc, tr = self.find_corres([(frame, ref_frame)])
+          t_fm_prep += tp
+          t_fm_2d += t2
+          t_fm_corres += tc
+          t_fm_ransac += tr
 
           # self.bundler._fm.findCorres(frame, ref_frame)
 
@@ -794,7 +818,7 @@ class BundleSdf:
           frame._status = my_cpp.Frame.FAIL
           logging.info(f"frame {frame._id_str} has not suitable ref_frame, mark as FAIL")
           self.bundler.forgetFrame(frame)
-          return
+          return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       logging.info(f"frame {frame._id_str} pose update before\n{frame._pose_in_model.round(3)}")
       offset = self.bundler._fm.procrustesByCorrespondence(frame, ref_frame)
@@ -817,12 +841,16 @@ class BundleSdf:
       local_frames = self.bundler._local_frames
 
       pairs = self.bundler.getFeatureMatchPairs(self.bundler._local_frames)
-      t0 = time.time()
-      self.find_corres(pairs)
-      t_fm_total += (time.time() - t0) * 1000.0
+      
+      tp, t2, tc, tr = self.find_corres(pairs)
+      t_fm_prep += tp
+      t_fm_2d += t2
+      t_fm_corres += tc
+      t_fm_ransac += tr
+      
       if frame._status==my_cpp.Frame.FAIL:
         self.bundler.forgetFrame(frame)
-        return
+        return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       find_matches = False
       t0 = time.time()
@@ -831,39 +859,19 @@ class BundleSdf:
 
       if frame._status==my_cpp.Frame.FAIL:
         self.bundler.forgetFrame(frame)
-        return
+        return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
       self.bundler.checkAndAddKeyframe(frame)
     
     finally:
-      # Record timing stats
-      # If it's a keyframe AND not failed, it will be sent to NeRF, so we buffer the stats.
-      # If not, we write immediately with NeRF time as n/a (0).
+      pass
       
-      if self.enable_timing_log:
-        # Check if frame is in keyframes list (it might have been removed if failed)
-        is_keyframe = False
-        if frame._status != my_cpp.Frame.FAIL:
-          for kf in self.bundler._keyframes:
-            if kf == frame:
-              is_keyframe = True
-              break
-        
-        if is_keyframe:
-          self.timing_buffer[frame._id_str] = {
-            'timestamp': t_start_timestamp,
-            'fm_ms': t_fm_total,
-            'ba_ms': t_ba
-          }
-        else:
-          with self.log_lock:
-            total_ms = t_fm_total + t_ba
-            with open(self.timing_csv_path, 'a') as f:
-              f.write(f"{t_start_timestamp},{frame._id_str},{total_ms:.1f},{t_fm_total:.1f},{t_ba:.1f},n/a,n/a,n/a\n")
+    return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba
 
 
 
   def run(self, color, depth, K, id_str, mask=None, occ_mask=None, pose_in_model=np.eye(4)):
+    t_run_start = time.time()
     self.cnt += 1
 
     if self.K is None:
@@ -896,7 +904,7 @@ class BundleSdf:
 
     logging.info(f"processNewFrame start {frame._id_str}")
     # self.bundler.processNewFrame(frame)
-    self.process_new_frame(frame)
+    fm_prep_ms, fm_2d_match_ms, fm_corres_ms, fm_ransac_ms, ba_ms = self.process_new_frame(frame)
     logging.info(f"processNewFrame done {frame._id_str}")
 
     if self.bundler._keyframes[-1]==frame:
@@ -986,6 +994,35 @@ class BundleSdf:
         self.gui_dict['id_str'] = frame._id_str
         self.gui_dict['K'] = self.K
         self.gui_dict['n_keyframe'] = len(self.bundler._keyframes)
+        
+    t_run_end = time.time()
+    total_ms = (t_run_end - t_run_start) * 1000.0
+    others_ms = total_ms - (fm_prep_ms + fm_2d_match_ms + fm_corres_ms + fm_ransac_ms + ba_ms)
+
+    if self.enable_timing_log:
+      # Check if frame is in keyframes list (it might have been removed if failed)
+      is_keyframe = False
+      if frame._status != my_cpp.Frame.FAIL:
+        for kf in self.bundler._keyframes:
+          if kf == frame:
+            is_keyframe = True
+            break
+      
+      if is_keyframe:
+        self.timing_buffer[frame._id_str] = {
+          'timestamp': t_run_start,
+          'total_ms': total_ms,
+          'fm_prep_ms': fm_prep_ms,
+          'fm_2d_match_ms': fm_2d_match_ms,
+          'fm_corres_ms': fm_corres_ms,
+          'fm_ransac_ms': fm_ransac_ms,
+          'ba_ms': ba_ms,
+          'others_ms': others_ms
+        }
+      else:
+        with self.log_lock:
+          with open(self.timing_csv_path, 'a') as f:
+            f.write(f"{t_run_start},{frame._id_str},{total_ms:.1f},{fm_prep_ms:.1f},{fm_2d_match_ms:.1f},{fm_corres_ms:.1f},{fm_ransac_ms:.1f},{ba_ms:.1f},{others_ms:.1f},n/a,n/a,n/a\n")
         
   def run_global_nerf(self, reader=None, get_texture=False, tex_res=1024):
     '''
