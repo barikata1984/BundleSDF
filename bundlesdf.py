@@ -387,6 +387,8 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
     # For simplicity and matching the trigger event, we assign the time to the current frame_id.
     # If previous frames are in buffer, we should flush them too.
     
+    nerf_ms_per_frame = nerf_ms / nerf_num_frames if nerf_num_frames > 0 else 0
+
     if enable_timing_log:
       with log_lock:
         # Check if current frame is in buffer (it should be if it was a keyframe)
@@ -394,12 +396,12 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
           data = timing_buffer.pop(frame_id)
           total_ms = data['fm_ms'] + data['ba_ms'] + nerf_ms
           with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-            f.write(f"{data['timestamp']},{frame_id},{total_ms:.1f},{data['fm_ms']:.1f},{data['ba_ms']:.1f},{nerf_ms:.1f}\n")
+            f.write(f"{data['timestamp']},{frame_id},{total_ms:.1f},{data['fm_ms']:.1f},{data['ba_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
         else:
           # Fallback if frame_id not in buffer (e.g. restart or logic gap), just log NeRF time
           # timestamp is now
           with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-            f.write(f"{time.time()},{frame_id},{nerf_ms:.1f},n/a,n/a,{nerf_ms:.1f}\n")
+            f.write(f"{time.time()},{frame_id},{nerf_ms:.1f},n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
 
     optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
 
@@ -494,7 +496,7 @@ class BundleSdf:
     if not os.path.exists(self.timing_csv_path):
       self.enable_timing_log = True
       with open(self.timing_csv_path, 'w') as f:
-        f.write("timestamp,frame_id,total_ms,feat_match_ms,bundle_adjust_ms,nerf_ms\n")
+        f.write("timestamp,frame_id,total_ms,feat_match_ms,bundle_adjust_ms,nerf_ms,nerf_n_frames,nerf_ms_per_frame\n")
     else:
       self.enable_timing_log = False
       logging.info("timing_stats.csv exists, disabling timing log for this run (likely global refinement)")
@@ -857,7 +859,7 @@ class BundleSdf:
           with self.log_lock:
             total_ms = t_fm_total + t_ba
             with open(self.timing_csv_path, 'a') as f:
-              f.write(f"{t_start_timestamp},{frame._id_str},{total_ms:.1f},{t_fm_total:.1f},{t_ba:.1f},n/a\n")
+              f.write(f"{t_start_timestamp},{frame._id_str},{total_ms:.1f},{t_fm_total:.1f},{t_ba:.1f},n/a,n/a,n/a\n")
 
 
 
