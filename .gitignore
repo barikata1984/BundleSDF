@@ -143,6 +143,9 @@ BundleTrack/HO3D_v3/
 !BundleTrack/XMem/inference/data
 run_used.yml
 results/*
+!results/milk
+results/milk/*
+!results/milk/timing_stats.csv
 !results/skimmed_milk
 results/skimmed_milk/*
 !results/skimmed_milk/timing_stats.csv
