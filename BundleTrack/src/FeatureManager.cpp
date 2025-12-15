@@ -12,6 +12,8 @@
 #include "FeatureManager.h"
 #include "cuda_ransac.h"
 #include <opencv2/cudafeatures2d.hpp>
+// FeatureManager.cpp の上部に追加
+#include <pcl/common/geometry.h>
 
 using namespace std;
 
