@@ -1,4 +1,5 @@
-FROM nvcr.io/nvidia/deepstream:7.1-triton-multiarch
+#FROM nvcr.io/nvidia/deepstream:7.1-triton-multiarch
+FROM nvcr.io/nvidia/deepstream:8.0-triton-multiarch
 
 ARG CMAKE_VERSION_MAJOR=3
 ARG CMAKE_VERSION_MINOR=25
@@ -9,12 +10,12 @@ ARG EIGEN_VERSION_MINOR=4
 ARG EIGEN_VERSION_PATCH=0
 
 ARG OPENCV_VERSION_MAJOR=4
-ARG OPENCV_VERSION_MINOR=11
+ARG OPENCV_VERSION_MINOR=12
 ARG OPENCV_VERSION_PATCH=0
 
 ARG PCL_VERSION_MAJOR=1
-ARG PCL_VERSION_MINOR=10
-ARG PCL_VERSION_PATCH=0
+ARG PCL_VERSION_MINOR=15
+ARG PCL_VERSION_PATCH=1
 
 ARG PYBIND11_VERSION_MAJOR=2
 ARG PYBIND11_VERSION_MINOR=13
@@ -70,7 +71,13 @@ RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
     libboost-iostreams-dev \
     libboost-system-dev \
     libboost-program-options-dev \
-    libboost-all-dev \
+    # Delete the all dev since it triggers to install MPI, which is incompatible with the specified PCL
+    # libboost-all-dev \
+    libboost-thread-dev \
+    libboost-serialization-dev \
+    libboost-chrono-dev \
+    libboost-atomic-dev \
+    libboost-regex-dev \
     # Point cloud and 3D processing
     libflann-dev \
     # Image and video processing
@@ -115,12 +122,12 @@ RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
 
 # Install cmake
 RUN cd / &&\
-wget http://www.cmake.org/files/v${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}/cmake-${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}.${CMAKE_VERSION_PATCH}.tar.gz &&\
-tar xf cmake-${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}.${CMAKE_VERSION_PATCH}.tar.gz &&\
-cd cmake-${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}.${CMAKE_VERSION_PATCH} &&\
-./configure &&\
-make &&\
-make install
+    wget http://www.cmake.org/files/v${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}/cmake-${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}.${CMAKE_VERSION_PATCH}.tar.gz &&\
+    tar xf cmake-${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}.${CMAKE_VERSION_PATCH}.tar.gz &&\
+    cd cmake-${CMAKE_VERSION_MAJOR}.${CMAKE_VERSION_MINOR}.${CMAKE_VERSION_PATCH} &&\
+    ./configure &&\
+    make &&\
+    make install
 
 
 # Install Eigen
@@ -143,41 +150,41 @@ RUN cd / && \
     mkdir -p /opencv/build && \
     cd /opencv/build && \
     cmake ..  -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_CUDA_STUBS=OFF \
-        -DBUILD_DOCS=OFF \
-        -DWITH_MATLAB=OFF \
-        -Dopencv_dnn_BUILD_TORCH_IMPORTE=OFF \
-        -DCUDA_FAST_MATH=ON \
-        -DMKL_WITH_OPENMP=ON \
-        -DOPENCV_ENABLE_NONFREE=ON \
-        -DWITH_OPENMP=ON \
-        -DWITH_QT=ON \
-        -DWITH_OPENEXR=ON \
-        -DENABLE_PRECOMPILED_HEADERS=OFF \
-        -DBUILD_opencv_cudacodec=OFF \
-        -DINSTALL_PYTHON_EXAMPLES=OFF \
-        -DWITH_TIFF=OFF \
-        -DWITH_WEBP=OFF \
-        -DWITH_FFMPEG=ON \
-        -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
-        -DCMAKE_CXX_FLAGS=-std=c++17 \
-        -DENABLE_CXX11=OFF \
-        -DBUILD_opencv_xfeatures2d=OFF \
-        -DOPENCV_DNN_OPENCL=OFF \
-        -DWITH_CUDA=ON \
-        -DWITH_OPENCL=OFF \
-        -DBUILD_opencv_wechat_qrcode=OFF \
-        -DCMAKE_CXX_STANDARD=17 \
-        -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-        -DOPENCV_CUDA_OPTIONS_opencv_test_cudev=-std=c++17 \
-        -DCUDA_ARCH_BIN="7.0 7.5 8.0 8.6 9.0" \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DCMAKE_INSTALL_LIBDIR=lib \
-        -DINSTALL_PKGCONFIG=ON \
-        -DOPENCV_GENERATE_PKGCONFIG=ON \
-        -DPKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
-        -DINSTALL_PYTHON_EXAMPLES=OFF \
-        -DINSTALL_C_EXAMPLES=OFF && \
+    -DBUILD_CUDA_STUBS=OFF \
+    -DBUILD_DOCS=OFF \
+    -DWITH_MATLAB=OFF \
+    -Dopencv_dnn_BUILD_TORCH_IMPORTE=OFF \
+    -DCUDA_FAST_MATH=ON \
+    -DMKL_WITH_OPENMP=ON \
+    -DOPENCV_ENABLE_NONFREE=ON \
+    -DWITH_OPENMP=ON \
+    -DWITH_QT=ON \
+    -DWITH_OPENEXR=ON \
+    -DENABLE_PRECOMPILED_HEADERS=OFF \
+    -DBUILD_opencv_cudacodec=OFF \
+    -DINSTALL_PYTHON_EXAMPLES=OFF \
+    -DWITH_TIFF=OFF \
+    -DWITH_WEBP=OFF \
+    -DWITH_FFMPEG=ON \
+    -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
+    -DCMAKE_CXX_FLAGS=-std=c++17 \
+    -DENABLE_CXX11=OFF \
+    -DBUILD_opencv_xfeatures2d=OFF \
+    -DOPENCV_DNN_OPENCL=OFF \
+    -DWITH_CUDA=ON \
+    -DWITH_OPENCL=OFF \
+    -DBUILD_opencv_wechat_qrcode=OFF \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+    -DOPENCV_CUDA_OPTIONS_opencv_test_cudev=-std=c++17 \
+    -DCUDA_ARCH_BIN="7.0 7.5 8.0 8.6 8.9 9.0 12.0" \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DINSTALL_PKGCONFIG=ON \
+    -DOPENCV_GENERATE_PKGCONFIG=ON \
+    -DPKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
+    -DINSTALL_PYTHON_EXAMPLES=OFF \
+    -DINSTALL_C_EXAMPLES=OFF && \
     make -j$(nproc) && \
     make install && \
     cd / && \
@@ -189,20 +196,20 @@ RUN cd / && \
     mkdir -p /pcl/build && \
     cd /pcl/build && \
     cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_apps=OFF \
-        -DBUILD_GPU=OFF \
-        -DBUILD_CUDA=OFF \
-        -DBUILD_examples=OFF \
-        -DBUILD_global_tests=OFF \
-        -DBUILD_simulation=OFF \
-        -DCUDA_BUILD_EMULATION=OFF \
-        -DCMAKE_CXX_FLAGS=-std=c++17 \
-        -DPCL_ENABLE_SSE=ON \
-        -DPCL_SHARED_LIBS=ON \
-        -DWITH_VTK=OFF \
-        -DPCL_ONLY_CORE_POINT_TYPES=ON \
-        -DPCL_COMMON_WARNINGS=OFF && \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_apps=OFF \
+    -DBUILD_GPU=OFF \
+    -DBUILD_CUDA=OFF \
+    -DBUILD_examples=OFF \
+    -DBUILD_global_tests=OFF \
+    -DBUILD_simulation=OFF \
+    -DCUDA_BUILD_EMULATION=OFF \
+    -DCMAKE_CXX_FLAGS=-std=c++17 \
+    -DPCL_ENABLE_SSE=ON \
+    -DPCL_SHARED_LIBS=ON \
+    -DWITH_VTK=OFF \
+    -DPCL_ONLY_CORE_POINT_TYPES=ON \
+    -DPCL_COMMON_WARNINGS=OFF && \
     make -j$(nproc) && \
     make install && \
     cd / && \
@@ -225,32 +232,45 @@ RUN cd / && \
     mkdir -p /yaml-cpp/build && \
     cd /yaml-cpp/build && \
     cmake .. \
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-        -DBUILD_TESTING=OFF \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DINSTALL_GTEST=OFF \
-        -DYAML_CPP_BUILD_TESTS=OFF \
-        -DYAML_BUILD_SHARED_LIBS=ON && \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DBUILD_TESTING=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DINSTALL_GTEST=OFF \
+    -DYAML_CPP_BUILD_TESTS=OFF \
+    -DYAML_BUILD_SHARED_LIBS=ON && \
     make -j$(nproc) && \
     make install && \
     cd / && \
     rm -rf /yaml-cpp
 
+# Install cppzmq
+RUN cd / && \
+    git clone --depth 1 https://github.com/zeromq/cppzmq && \
+    mkdir -p /cppzmq/build && \
+    cd /cppzmq/build && \
+    cmake .. -DCPPZMQ_BUILD_TESTS=OFF && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /cppzmq
+
 SHELL ["/bin/bash", "--login", "-c"]
 
 # Install Python packages directly with system Python to add additional conda env since docker should provide isolated environment
 RUN apt-get remove -y python3-blinker || true && \
-    pip3 install --upgrade pip setuptools wheel && \
-    pip3 install torch==2.6.0 torchvision==0.21.0 torchaudio && \
-    pip3 install --no-cache-dir kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu124.html && \
-    pip3 install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@stable" && \
+    pip3 install --upgrade --ignore-installed --break-system-packages pip setuptools wheel && \
+    # pip3 install torch==2.6.0 torchvision==0.21.0 torchaudio && \
+    pip3 install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 && \
+    #pip3 install --no-cache-dir kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu124.html && \
+    pip3 install --no-cache-dir kaolin==0.18.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html && \
+    pip3 install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9" && \
     pip3 install --break-system-packages --force-reinstall blinker && \
-    pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab ninja "Cython>=0.29.37" yacs && \
+    pip3 install "trimesh<4.0.0" wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab "jupyter-client>=8.6.0" ninja "Cython>=0.29.37" yacs && \
     pip3 install scipy scikit-learn
 
 
-ENV CUDA_HOME /usr/local/cuda
-ENV LD_LIBRARY_PATH /usr/local/cuda/lib64
+ENV CUDA_HOME=/usr/local/cuda
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
 ENV OPENCV_IO_ENABLE_OPENEXR=1
 # Fix multiprocessing issues
 ENV PYTHONUNBUFFERED=1
