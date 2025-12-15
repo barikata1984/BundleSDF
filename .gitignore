@@ -137,10 +137,10 @@ dmypy.json
 .pyre/
 
 # Datasets
-data/
+data/*
 logs/
-BundleTrack/HO3D_v3/
-!BundleTrack/XMem/inference/data
+BundleTrack/HO3D_v3/*
+BundleTrack/XMem/*
 run_used.yml
 results/*
 !results/milk
