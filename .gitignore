@@ -141,6 +141,7 @@ data/*
 logs/
 third_party/BundleTrack/HO3D_v3/*
 third_party/BundleTrack/XMem/*
+third_party/BundleTrack/XMem/*
 run_used.yml
 results/*
 !results/milk
