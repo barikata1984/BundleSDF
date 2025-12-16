@@ -267,7 +267,7 @@ RUN apt-get remove -y python3-blinker || true && \
     pip3 install --break-system-packages --force-reinstall blinker && \
     pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab "jupyter-client>=8.6.0" ninja "Cython>=0.29.37" yacs && \
     pip3 install scipy scikit-learn && \
-    pip3 install upgrade PyOpenGL
+    pip3 install --upgrade PyOpenGL
 
 
 ENV CUDA_HOME=/usr/local/cuda
