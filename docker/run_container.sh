@@ -1,30 +1,47 @@
 #!/bin/bash
 
-# Remove the existing container if there it is
-docker rm -f bundlesdf
+# コンテナ名を指定
+CONTAINER_NAME="prebuild-bundlesdf-blackwell"
+IMAGE_NAME="bundlesdf-blackwell"
 
-# プロジェクトディレクトリ
+# マウント用のディレクトリ設定
 DIR=$(pwd)/../
-echo "DIR to be mounted: $DIR"
 
-# Do not use the following command since it may too strong and unsafe to be used on the shared server
-# xhost +  && docker run --gpus all --env NVIDIA_DISABLE_REQUIRE=1 -it --network=host --name bundlesdf  --cap-add=SYS_PTRACE --security-opt seccomp=unconfined  -v /home:/home -v /tmp:/tmp -v /mnt:/mnt -v $DIR:$DIR  --ipc=host -e DISPLAY=${DISPLAY} -e GIT_INDEX_FILE nvcr.io/nvidian/bundlesdf:latest bash
+# 画面描画の許可 (共通して必要)
+xhost +
 
-docker run --name bundlesdf \
-  --interactive \
-  --tty \
-  --network=host \
-  --gpus all \
-  --env NVIDIA_DISABLE_REQUIRE=1 \
-  --env GIT_INDEX_FILE \
-  --env DISPLAY=$DISPLAY \
-  --env XAUTHORITY=/root/.Xauthority \
-  --ipc=host \
-  --cap-add=SYS_PTRACE \
-  --security-opt seccomp=unconfined \
-  --volume /tmp:/tmp \
-  --volume /mnt:/mnt \
-  --volume $DIR:$DIR \
-  --volume ~/.Xauthority:/root/.Xauthority:rw \
-  prebuilt-bundlesdf:latest \
-  bash
+# コンテナが存在するか確認
+if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
+    echo "--------------------------------------------------"
+    echo "Existing container '${CONTAINER_NAME}' was found."
+    echo "Resume it..."
+    echo "--------------------------------------------------"
+    
+    # 既存のコンテナをインタラクティブモードで再開
+    docker start -ai ${CONTAINER_NAME}
+
+else
+    echo "--------------------------------------------------"
+    echo "Containers named '${CONTAINER_NAME}' was not found."
+    echo "Make and run a container withe the name."
+    echo "--------------------------------------------------"
+
+    # 新規作成コマンド (--name を変更し、rm は除去)
+    docker run \
+        --name ${CONTAINER_NAME} \
+        --gpus all \
+        --env NVIDIA_DISABLE_REQUIRE=1 \
+        --interactive \
+        --tty \
+        --network=host \
+        --ipc=host \
+        --cap-add=SYS_PTRACE \
+        --security-opt seccomp=unconfined \
+        --volume /home:/home \
+        --volume /tmp:/tmp \
+        --volume /mnt:/mnt \
+        --volume $DIR:$DIR \
+        --env DISPLAY=${DISPLAY} \
+        --env GIT_INDEX_FILE \
+        ${IMAGE_NAME} bash
+fi
