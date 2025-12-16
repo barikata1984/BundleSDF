@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # コンテナ名を指定
-CONTAINER_NAME="prebuild-bundlesdf-blackwell"
+CONTAINER_NAME="bundlesdf-blackwell"
 IMAGE_NAME="bundlesdf-blackwell"
 
 # マウント用のディレクトリ設定
@@ -29,6 +29,7 @@ else
     # 新規作成コマンド (--name を変更し、rm は除去)
     docker run \
         --name ${CONTAINER_NAME} \
+        --privileged \
         --gpus all \
         --env NVIDIA_DISABLE_REQUIRE=1 \
         --interactive \
