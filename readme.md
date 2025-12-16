@@ -54,13 +54,13 @@ docker build --network host -t local/bundlesdf-blackwell .
 - Start a docker container the first time
 
 ```
-cd docker && bash run_container_for_the_first_time.sh
+cd docker && bash run_container.sh
 
-# Inside docker container, compile the packages which are machine dependent
+# After getting inside the container, compile machin-dependent packages
 bash build.sh
 ```
 
-- (Optional) In my setup, or if setting up this application as of 20251101 or later, I had to run the following command additionally (cf. <https://github.com/NVlabs/BundleSDF/issues/197>)
+- (Optional) In my setup on the GPU server, or mayby if setting up this application as of 20251101 or later, need to run the following command additionally (cf. <https://github.com/NVlabs/BundleSDF/issues/197>)
 
 ```
 python setup.py build_ext --inplace
@@ -69,26 +69,12 @@ python setup.py build_ext --inplace
 python3 setup.py build_ext --inplace
 ```
 
-# Commit the build container as an image
-
-Building a container everytime is time consuming and tedious. So, it is recommended to make an image of the container that has been built. To make it, you need to exit the container like
-
-```
-root@HOSTNAME:~/BundleSDF# exit
-```
-
-Then
-
-```
-docker commit bundlesdf prebuilt-bundlesdf
-```
-
 # Run the container
 
 Call the following command to run the prebuilt container
 
 ```
-bash run_container.sh
+cd docker && bash run_container.sh
 ```
 
 # Run on your custom data
@@ -109,10 +95,10 @@ Due to license issues, we are not able to include [XMem](https://github.com/hkch
 
 ```
 # 1) Run joint tracking and reconstruction. 
-python3 run_custom.py --mode run_video --video_dir ./data/2022-11-18-15-10-24_milk --out_folder ./results/milk --use_segmenter 1 --use_gui 1 --debug_level 2
+python3 run_custom.py --mode run_video --video_dir ./data/milk --out_folder ./results/milk --use_segmenter 1 --use_gui 1 --debug_level 2
 
 # 2) Run global refinement post-processing to refine the mesh
-python3 run_custom.py --mode global-refine --video_dir ./data/2022-11-18-15-10-24_milk --out_folder ./results/milk 
+python3 run_custom.py --mode global-refine --video_dir ./data/milk --out_folder ./results/milk 
 
 # 3) (Optional) If you want to draw the oriented bounding box to visualize the pose, similar to our demo
 python run_custom.py --mode draw_pose --out_folder ./results/milk
@@ -138,4 +124,4 @@ We would like to thank Jeff Smith for helping with the code release. Marco Foco 
 
 # Contact
 
-For questions, please contact Bowen Wen (<bowenw@nvidia.com>)
+For questions, please contact Bowen Wen (<franche1984@gmail.com>)
