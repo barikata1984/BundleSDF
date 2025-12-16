@@ -20,7 +20,7 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
 
   os.system(f'rm -rf {out_folder} && mkdir -p {out_folder}')
 
-  cfg_bundletrack = yaml.load(open(f"{code_dir}/BundleTrack/config_ho3d.yml",'r'))
+  cfg_bundletrack = yaml.load(open(f"{code_dir}/third_party/BundleTrack/config_ho3d.yml",'r'))
   cfg_bundletrack['SPDLOG'] = int(args.debug_level)
   cfg_bundletrack['depth_processing']["percentile"] = 95
   cfg_bundletrack['erode_mask'] = 3
@@ -32,7 +32,7 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
   cfg_bundletrack['feature_corres']['max_dist_no_neighbor'] = 0.01
   cfg_bundletrack['feature_corres']['max_normal_no_neighbor'] = 20
   cfg_bundletrack['feature_corres']['map_points'] = True
-  cfg_bundletrack['feature_corres']['resize'] = 320
+  cfg_bundletrack['feature_corres']['resize'] = 400
   cfg_bundletrack['feature_corres']['rematch_after_nerf'] = True
   cfg_bundletrack['keyframe']['min_rot'] = 5
   cfg_bundletrack['ransac']['inlier_dist'] = 0.01
@@ -104,7 +104,6 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
   tracker.on_finish()
 
   run_one_video_global_nerf(out_folder=out_folder)
-
 
 
 def run_one_video_global_nerf(out_folder='/home/bowen/debug/bundlesdf_scan_coffee_415'):
@@ -187,7 +186,6 @@ def postprocess_mesh(out_folder):
   mesh.export(f'{out_folder}/mesh/mesh_biggest_component_smoothed.obj')
 
 
-
 def draw_pose():
   K = np.loadtxt(f'{args.out_folder}/cam_K.txt').reshape(3,3)
   color_files = sorted(glob.glob(f'{args.out_folder}/color/*'))
@@ -204,7 +202,6 @@ def draw_pose():
     vis = draw_posed_3d_box(K, color, ob_in_cam=pose, bbox=bbox, line_color=(255,255,0))
     id_str = os.path.basename(color_file).replace('.png','')
     imageio.imwrite(f'{out_dir}/{id_str}.png', vis)
-
 
 
 if __name__=="__main__":

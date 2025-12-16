@@ -12,7 +12,7 @@ code_dir = os.path.dirname(os.path.realpath(__file__))
 import argparse
 import cv2
 import torch,imageio
-from BundleTrack.LoFTR.src.loftr import *
+from third_party.BundleTrack.LoFTR.src.loftr import *
 from Utils import *
 
 
@@ -21,7 +21,7 @@ class LoftrRunner:
     default_cfg['match_coarse']['thr'] = 0.2
     print("default_cfg",default_cfg)
     self.matcher = LoFTR(config=default_cfg)
-    self.matcher.load_state_dict(torch.load(f'{code_dir}/BundleTrack/LoFTR/weights/outdoor_ds.ckpt')['state_dict'])
+    self.matcher.load_state_dict(torch.load(f'{code_dir}/third_party/BundleTrack/LoFTR/weights/outdoor_ds.ckpt')['state_dict'])
     self.matcher = self.matcher.eval().cuda()
 
 

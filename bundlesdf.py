@@ -11,10 +11,10 @@ from Utils import *
 from nerf_runner import *
 from tool import *
 code_dir = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(f'{code_dir}/BundleTrack/build')
+sys.path.append(f'{code_dir}/third_party/BundleTrack/build')
 import my_cpp
 from gui import *
-from BundleTrack.scripts.data_reader import *
+from third_party.BundleTrack.scripts.data_reader import *
 from Utils import *
 from loftr_wrapper import LoftrRunner
 import multiprocessing,threading
@@ -212,227 +212,241 @@ def run_gui(gui_dict, gui_lock):
 
 
 def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, start_nerf_keyframes, use_gui, gui_lock, gui_dict, debug_dir, timing_buffer, log_lock, enable_timing_log):
-  vox_res = 0.01
-  nerf_num_frames = 0
-  cnt_nerf = -1
-  rgbs_all = []
-  depths_all = []
-  normal_maps_all = []
-  masks_all = []
-  occ_masks_all = []
-  prev_pcd_real_scale = None
-  tf_normalize = None
-  if translation is not None:
-    tf_normalize = np.eye(4)
-    tf_normalize[:3,3] = translation
-    tf1 = np.eye(4)
-    tf1[:3,:3] *= sc_factor
-    tf_normalize = tf1@tf_normalize
-    cfg_nerf['sc_factor'] = float(sc_factor)
-    cfg_nerf['translation'] = translation
-
-  with lock:
-    SPDLOG = p_dict['SPDLOG']
-
-  while 1:
-    with lock:
-      join = p_dict['join']
-
-    if join:
-      break
-
-    skip = False
-    with lock:
-      if cnt_nerf==-1 and len(kf_to_nerf_list)<start_nerf_keyframes:
-        skip = True
-        p_dict['running'] = False
-      else:
-        if len(kf_to_nerf_list)>0:
-          p_dict['running'] = True
-          frame_id = p_dict['frame_id']
-          cam_in_obs = p_dict['cam_in_obs'].copy()
-          rgbs = []
-          depths = []
-          normal_maps = []
-          masks = []
-          occ_masks = []
-          for f in kf_to_nerf_list:
-            rgbs.append(f['rgb'])
-            depths.append(f['depth'])
-            masks.append(f['mask'])
-            if f['normal_map'] is not None:
-              normal_maps.append(f['normal_map'])
-            if f['occ_mask'] is not None:
-              occ_masks.append(f['occ_mask'])
-          K = p_dict['K']
-          nerf_num_frames += len(rgbs)
-          p_dict['nerf_num_frames'] = nerf_num_frames
-          kf_to_nerf_list[:] = []
-          if use_gui:
-            with gui_lock:
-              gui_dict['nerf_num_frames'] = nerf_num_frames
-        else:
-          skip = True
-
-    if skip:
-      time.sleep(0.01)
-      continue
-
-    cnt_nerf += 1
-    rgbs_all += list(rgbs)
-    depths_all += list(depths)
-    masks_all += list(masks)
-    if normal_maps is not None:
-      normal_maps_all += list(normal_maps)
-    if occ_masks is not None:
-      occ_masks_all += list(occ_masks)
-
-    out_dir = f"{debug_dir}/{frame_id}/nerf"
-    logging.info(f"out_dir: {out_dir}")
-    os.makedirs(out_dir, exist_ok=True)
-    os.system(f"rm -rf {cfg_nerf['datadir']} && mkdir -p {cfg_nerf['datadir']}")
-
-    glcam_in_obs = cam_in_obs@glcam_in_cvcam
-
-    if cfg_nerf['continual']:
-      if cnt_nerf==0:
-        if translation is None:
-          sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(None,glcam_in_obs,K,use_mask=True,base_dir=cfg_nerf['save_dir'],rgbs=np.array(rgbs_all),depths=np.array(depths_all),masks=np.array(masks_all), eps=cfg_nerf['dbscan_eps'], min_samples=cfg_nerf['dbscan_eps_min_samples'])
-          sc_factor *= 0.7      # Ensure whole object within bound
-          cfg_nerf['sc_factor'] = float(sc_factor)
-          cfg_nerf['translation'] = translation
-          tf_normalize = np.eye(4)
-          tf_normalize[:3,3] = translation
-          tf1 = np.eye(4)
-          tf1[:3,:3] *= sc_factor
-          tf_normalize = tf1@tf_normalize
-
-        pcd_all = pcd_real_scale
-
-      else:
-        pcd_all = prev_pcd_real_scale
-        for i in range(len(rgbs)):
-          pts, colors = compute_scene_bounds_worker(None,K,glcam_in_obs[len(glcam_in_obs)-len(rgbs)+i],use_mask=True,rgb=rgbs[i],depth=depths[i],mask=masks[i])
-          pcd_all += toOpen3dCloud(pts, colors)
-        pcd_all = pcd_all.voxel_down_sample(vox_res)
-        _,keep_mask = find_biggest_cluster(np.asarray(pcd_all.points), eps=cfg_nerf['dbscan_eps'], min_samples=cfg_nerf['dbscan_eps_min_samples'])
-        keep_ids = np.arange(len(np.asarray(pcd_all.points)))[keep_mask]
-        pcd_all = pcd_all.select_by_index(keep_ids)
-
-        ########## Clear memory
-        rgbs_all = []
-        depths_all = []
-        normal_maps_all = []
-        masks_all = []
-        occ_masks_all = []
-
-      pcd_normalized = copy.deepcopy(pcd_all)
-      pcd_normalized.transform(tf_normalize)
-      if normal_maps is not None and len(normal_maps)>0:
-        normal_maps = np.array(normal_maps)
-      else:
-        normal_maps = None
-      rgbs,depths,masks,normal_maps,poses = preprocess_data(np.array(rgbs),np.array(depths),np.array(masks),normal_maps=normal_maps,poses=glcam_in_obs,sc_factor=cfg_nerf['sc_factor'],translation=cfg_nerf['translation'])
-
-    else:
-      logging.info(f"compute_scene_bounds, latest nerf frame {frame_id}")
-      sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(None,glcam_in_obs,K,use_mask=True,base_dir=cfg_nerf['save_dir'],rgbs=np.array(rgbs_all),depths=np.array(depths_all),masks=np.array(masks_all), eps=cfg_nerf['dbscan_eps'], min_samples=cfg_nerf['dbscan_eps_min_samples'])
-
+  try:
+    with open("/tmp/run_nerf_progress.log", "w") as f: f.write("run_nerf process started\n")
+    def log_progress(msg):
+        with open("/tmp/run_nerf_progress.log", "a") as f:
+            f.write(f"{time.time()}: {msg}\n")
+    
+    log_progress("Initializing variables")
+    vox_res = 0.01
+    nerf_num_frames = 0
+    cnt_nerf = -1
+    rgbs_all = []
+    depths_all = []
+    normal_maps_all = []
+    masks_all = []
+    occ_masks_all = []
+    prev_pcd_real_scale = None
+    tf_normalize = None
+    if translation is not None:
+      tf_normalize = np.eye(4)
+      tf_normalize[:3,3] = translation
+      tf1 = np.eye(4)
+      tf1[:3,:3] *= sc_factor
+      tf_normalize = tf1@tf_normalize
       cfg_nerf['sc_factor'] = float(sc_factor)
       cfg_nerf['translation'] = translation
 
-      if normal_maps_all is not None and len(normal_maps_all)>0:
-        normal_maps = np.array(normal_maps_all)
-      else:
-        normal_maps = None
-
-      logging.info(f"preprocess_data, latest nerf frame {frame_id}")
-      rgbs,depths,masks,normal_maps,poses = preprocess_data(np.array(rgbs_all),np.array(depths_all),np.array(masks_all),normal_maps=normal_maps,poses=glcam_in_obs,sc_factor=cfg_nerf['sc_factor'],translation=cfg_nerf['translation'])
-
-    # cfg_nerf['sampled_frame_ids'] = np.arange(len(rgbs_all))
-
-
-    if SPDLOG>=2:
-      np.savetxt(f"{cfg_nerf['save_dir']}/trainval_poses.txt",glcam_in_obs.reshape(-1,4))
-      np.savetxt(f"{debug_dir}/{frame_id}/poses_before_nerf.txt",np.array(cam_in_obs).reshape(-1,4))
-
-    if len(occ_masks_all)>0:
-      if cfg_nerf['continual']:
-        occ_masks = np.array(occ_masks)
-      else:
-        occ_masks = np.array(occ_masks_all)
-    else:
-      occ_masks = None
-
-    if cnt_nerf==0:
-      logging.info(f"First nerf run, create Runner, latest nerf frame {frame_id}")
-      nerf = NerfRunner(cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=K,build_octree_pcd=pcd_normalized)
-    else:
-      if cfg_nerf['continual']:
-        logging.info(f"add_new_frames, latest nerf frame {frame_id}")
-        nerf.add_new_frames(rgbs,depths,masks,normal_maps,poses,occ_masks=occ_masks, new_pcd=pcd_normalized, reuse_weights=False)
-      else:
-        nerf = NerfRunner(cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=K,build_octree_pcd=pcd_normalized)
-
-    logging.info(f"Start training, latest nerf frame {frame_id}")
-    t_nerf_start = time.time()
-    nerf.train()
-    t_nerf_end = time.time()
-    nerf_ms = (t_nerf_end - t_nerf_start) * 1000.0
-    logging.info(f"Training done, latest nerf frame {frame_id}")
-
-    # Write timing stats for processed frames
-    # Note: nerf.train() processes multiple frames if accumulated, but here we associate the cost 
-    # mainly to the latest frame_id which triggered the training, or we could split it.
-    # For simplicity and matching the trigger event, we assign the time to the current frame_id.
-    # If previous frames are in buffer, we should flush them too.
-    
-    nerf_ms_per_frame = nerf_ms / nerf_num_frames if nerf_num_frames > 0 else 0
-
-    if enable_timing_log:
-      with log_lock:
-        # Check if current frame is in buffer (it should be if it was a keyframe)
-        if frame_id in timing_buffer:
-          data = timing_buffer.pop(frame_id)
-          # total_ms, others_ms are already in data
-          with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-            f.write(f"{data['timestamp']},{frame_id},{data['total_ms']:.1f},{data['fm_prep_ms']:.1f},{data['fm_2d_match_ms']:.1f},{data['fm_corres_ms']:.1f},{data['fm_ransac_ms']:.1f},{data['ba_ms']:.1f},{data['others_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
-        else:
-          # Fallback if frame_id not in buffer (e.g. restart or logic gap), just log NeRF time
-          # timestamp is now
-          with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
-            f.write(f"{time.time()},{frame_id},n/a,n/a,n/a,n/a,n/a,n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
-
-    optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
-
-    logging.info("Getting mesh")
-    mesh = nerf.extract_mesh(isolevel=0,voxel_size=cfg_nerf['mesh_resolution'])
-    mesh = mesh_to_real_world(mesh, pose_offset=offset, translation=nerf.cfg['translation'], sc_factor=nerf.cfg['sc_factor'])
-
     with lock:
-      p_dict['optimized_cvcam_in_obs'] = optimized_cvcam_in_obs
+      SPDLOG = p_dict['SPDLOG']
+
+    log_progress("Entering main loop")
+    while 1:
+      with lock:
+        join = p_dict['join']
+
+      if join:
+        log_progress("Join signal received, breaking loop")
+        break
+
+      skip = False
+      with lock:
+        if cnt_nerf==-1 and len(kf_to_nerf_list)<start_nerf_keyframes:
+          skip = True
+          p_dict['running'] = False
+        else:
+          if len(kf_to_nerf_list)>0:
+            p_dict['running'] = True
+            frame_id = p_dict['frame_id']
+            cam_in_obs = p_dict['cam_in_obs'].copy()
+            rgbs = []
+            depths = []
+            normal_maps = []
+            masks = []
+            occ_masks = []
+            for f in kf_to_nerf_list:
+              rgbs.append(f['rgb'])
+              depths.append(f['depth'])
+              masks.append(f['mask'])
+              if f['normal_map'] is not None:
+                normal_maps.append(f['normal_map'])
+              if f['occ_mask'] is not None:
+                occ_masks.append(f['occ_mask'])
+            K = p_dict['K']
+            nerf_num_frames += len(rgbs)
+            p_dict['nerf_num_frames'] = nerf_num_frames
+            kf_to_nerf_list[:] = []
+            if use_gui:
+              with gui_lock:
+                gui_dict['nerf_num_frames'] = nerf_num_frames
+            log_progress(f"Got new work: frame_id={frame_id}, nerf_num_frames={nerf_num_frames}")
+          else:
+            skip = True
+
+      if skip:
+        # log_progress("Skipping (wait for frames)") # Commented out to avoid log spam
+        time.sleep(0.01)
+        continue
+
+      log_progress("Processing batch")
+      cnt_nerf += 1
+      rgbs_all += list(rgbs)
+      depths_all += list(depths)
+      masks_all += list(masks)
+      if normal_maps is not None:
+        normal_maps_all += list(normal_maps)
+      if occ_masks is not None:
+        occ_masks_all += list(occ_masks)
+
+      out_dir = f"{debug_dir}/{frame_id}/nerf"
+      logging.info(f"out_dir: {out_dir}")
+      os.makedirs(out_dir, exist_ok=True)
+      os.system(f"rm -rf {cfg_nerf['datadir']} && mkdir -p {cfg_nerf['datadir']}")
+
+      glcam_in_obs = cam_in_obs@glcam_in_cvcam
+
+      if cfg_nerf['continual']:
+        if cnt_nerf==0:
+          log_progress("Initializing continual nerf (cnt_nerf=0)")
+          if translation is None:
+            sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(None,glcam_in_obs,K,use_mask=True,base_dir=cfg_nerf['save_dir'],rgbs=np.array(rgbs_all),depths=np.array(depths_all),masks=np.array(masks_all), eps=cfg_nerf['dbscan_eps'], min_samples=cfg_nerf['dbscan_eps_min_samples'])
+            sc_factor *= 0.7      # Ensure whole object within bound
+            cfg_nerf['sc_factor'] = float(sc_factor)
+            cfg_nerf['translation'] = translation
+            tf_normalize = np.eye(4)
+            tf_normalize[:3,3] = translation
+            tf1 = np.eye(4)
+            tf1[:3,:3] *= sc_factor
+            tf_normalize = tf1@tf_normalize
+
+          pcd_all = pcd_real_scale
+
+        else:
+          log_progress(f"Continual update (cnt_nerf={cnt_nerf})")
+          pcd_all = prev_pcd_real_scale
+          for i in range(len(rgbs)):
+            pts, colors = compute_scene_bounds_worker(None,K,glcam_in_obs[len(glcam_in_obs)-len(rgbs)+i],use_mask=True,rgb=rgbs[i],depth=depths[i],mask=masks[i])
+            pcd_all += toOpen3dCloud(pts, colors)
+          pcd_all = pcd_all.voxel_down_sample(vox_res)
+          _,keep_mask = find_biggest_cluster(np.asarray(pcd_all.points), eps=cfg_nerf['dbscan_eps'], min_samples=cfg_nerf['dbscan_eps_min_samples'])
+          keep_ids = np.arange(len(np.asarray(pcd_all.points)))[keep_mask]
+          pcd_all = pcd_all.select_by_index(keep_ids)
+
+          ########## Clear memory
+          rgbs_all = []
+          depths_all = []
+          normal_maps_all = []
+          masks_all = []
+          occ_masks_all = []
+
+        pcd_normalized = copy.deepcopy(pcd_all)
+        pcd_normalized.transform(tf_normalize)
+        if normal_maps is not None and len(normal_maps)>0:
+          normal_maps = np.array(normal_maps)
+        else:
+          normal_maps = None
+        rgbs,depths,masks,normal_maps,poses = preprocess_data(np.array(rgbs),np.array(depths),np.array(masks),normal_maps=normal_maps,poses=glcam_in_obs,sc_factor=cfg_nerf['sc_factor'],translation=cfg_nerf['translation'])
+
+      else:
+        log_progress("Standard mode scene bounds")
+        logging.info(f"compute_scene_bounds, latest nerf frame {frame_id}")
+        sc_factor,translation,pcd_real_scale, pcd_normalized = compute_scene_bounds(None,glcam_in_obs,K,use_mask=True,base_dir=cfg_nerf['save_dir'],rgbs=np.array(rgbs_all),depths=np.array(depths_all),masks=np.array(masks_all), eps=cfg_nerf['dbscan_eps'], min_samples=cfg_nerf['dbscan_eps_min_samples'])
+
+        cfg_nerf['sc_factor'] = float(sc_factor)
+        cfg_nerf['translation'] = translation
+
+        if normal_maps_all is not None and len(normal_maps_all)>0:
+          normal_maps = np.array(normal_maps_all)
+        else:
+          normal_maps = None
+
+        logging.info(f"preprocess_data, latest nerf frame {frame_id}")
+        rgbs,depths,masks,normal_maps,poses = preprocess_data(np.array(rgbs_all),np.array(depths_all),np.array(masks_all),normal_maps=normal_maps,poses=glcam_in_obs,sc_factor=cfg_nerf['sc_factor'],translation=cfg_nerf['translation'])
+
+      if SPDLOG>=2:
+        np.savetxt(f"{cfg_nerf['save_dir']}/trainval_poses.txt",glcam_in_obs.reshape(-1,4))
+        np.savetxt(f"{debug_dir}/{frame_id}/poses_before_nerf.txt",np.array(cam_in_obs).reshape(-1,4))
+
+      if len(occ_masks_all)>0:
+        if cfg_nerf['continual']:
+          occ_masks = np.array(occ_masks)
+        else:
+          occ_masks = np.array(occ_masks_all)
+      else:
+        occ_masks = None
+
+      if cnt_nerf==0:
+        logging.info(f"First nerf run, create Runner, latest nerf frame {frame_id}")
+        log_progress("Creating NerfRunner (first run)")
+        nerf = NerfRunner(cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=K,build_octree_pcd=pcd_normalized)
+      else:
+        if cfg_nerf['continual']:
+          logging.info(f"add_new_frames, latest nerf frame {frame_id}")
+          log_progress("Adding new frames to NerfRunner")
+          nerf.add_new_frames(rgbs,depths,masks,normal_maps,poses,occ_masks=occ_masks, new_pcd=pcd_normalized, reuse_weights=False)
+        else:
+          log_progress("Creating NerfRunner (standard)")
+          nerf = NerfRunner(cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=K,build_octree_pcd=pcd_normalized)
+
+      logging.info(f"Start training, latest nerf frame {frame_id}")
+      log_progress(f"Starting nerf.train() for frame {frame_id}")
+      t_nerf_start = time.time()
+      nerf.train()
+      t_nerf_end = time.time()
+      log_progress("nerf.train() completed")
+      nerf_ms = (t_nerf_end - t_nerf_start) * 1000.0
+      logging.info(f"Training done, latest nerf frame {frame_id}")
+
+      # Write timing stats for processed frames
+      nerf_ms_per_frame = nerf_ms / nerf_num_frames if nerf_num_frames > 0 else 0
+
+      if enable_timing_log:
+        with log_lock:
+          if frame_id in timing_buffer:
+            data = timing_buffer.pop(frame_id)
+            with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
+              f.write(f"{data['timestamp']},{frame_id},{data['total_ms']:.1f},{data['fm_prep_ms']:.1f},{data['fm_2d_match_ms']:.1f},{data['fm_corres_ms']:.1f},{data['fm_ransac_ms']:.1f},{data['ba_ms']:.1f},{data['others_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
+          else:
+            with open(os.path.join(debug_dir, 'timing_stats.csv'), 'a') as f:
+              f.write(f"{time.time()},{frame_id},n/a,n/a,n/a,n/a,n/a,n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n")
+
+      optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
+
+      logging.info("Getting mesh")
+      mesh = nerf.extract_mesh(isolevel=0,voxel_size=cfg_nerf['mesh_resolution'])
+      mesh = mesh_to_real_world(mesh, pose_offset=offset, translation=nerf.cfg['translation'], sc_factor=nerf.cfg['sc_factor'])
+
+      with lock:
+        p_dict['optimized_cvcam_in_obs'] = optimized_cvcam_in_obs
+        p_dict['running'] = False
+        p_dict['mesh'] = mesh
+
+      logging.info(f"nerf done at frame {frame_id}")
+      
+      prev_pcd_real_scale = copy.deepcopy(pcd_real_scale)
+
+      ####### Log
+      if SPDLOG>=2:
+        os.system(f"cp -r {cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
+        with open(f"{out_dir}/config.yml",'w') as ff:
+          tmp = copy.deepcopy(cfg_nerf)
+          for k in tmp.keys():
+            if isinstance(tmp[k],np.ndarray):
+              tmp[k] = tmp[k].tolist()
+          yaml.dump(tmp,ff)
+        shutil.copy(f"{out_dir}/config.yml",f"{cfg_nerf['save_dir']}/")
+        np.savetxt(f"{debug_dir}/{frame_id}/poses_after_nerf.txt",np.array(optimized_cvcam_in_obs).reshape(-1,4))
+        mesh.export(f"{cfg_nerf['save_dir']}/mesh_real_world.obj")
+        os.system(f"rm -rf {cfg_nerf['save_dir']}/step_*_mesh_real_world.obj {cfg_nerf['save_dir']}/*frame*ray*.ply && mv {cfg_nerf['save_dir']}/*  {out_dir}/")
+
+  except Exception:
+    import traceback
+    with open("/tmp/nerf_runner_crash.log", "w") as f:
+        f.write(traceback.format_exc())
+    logging.exception("NerfRunner Process Crashed")
+    with lock:
       p_dict['running'] = False
-      # p_dict['nerf_last'] = nerf    #!NOTE not pickable
-      p_dict['mesh'] = mesh
-
-    logging.info(f"nerf done at frame {frame_id}")
-
-    if cfg_nerf['continual']:
-      prev_pcd_real_scale = pcd_all.voxel_down_sample(vox_res)
-
-    ####### Log
-    if SPDLOG>=2:
-      os.system(f"cp -r {cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
-      with open(f"{out_dir}/config.yml",'w') as ff:
-        tmp = copy.deepcopy(cfg_nerf)
-        for k in tmp.keys():
-          if isinstance(tmp[k],np.ndarray):
-            tmp[k] = tmp[k].tolist()
-        yaml.dump(tmp,ff)
-      shutil.copy(f"{out_dir}/config.yml",f"{cfg_nerf['save_dir']}/")
-      np.savetxt(f"{debug_dir}/{frame_id}/poses_after_nerf.txt",np.array(optimized_cvcam_in_obs).reshape(-1,4))
-      mesh.export(f"{cfg_nerf['save_dir']}/mesh_real_world.obj")
-      os.system(f"rm -rf {cfg_nerf['save_dir']}/step_*_mesh_real_world.obj {cfg_nerf['save_dir']}/*frame*ray*.ply && mv {cfg_nerf['save_dir']}/*  {out_dir}/")
 
 
 
@@ -1229,7 +1243,10 @@ if __name__=="__main__":
   set_seed(0)
   torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-  cfg_nerf = yaml.load(open(f"{code_dir}/BundleTrack/config_ho3d.yml",'r'))
+  config_path = f"{code_dir}/third_party/BundleTrack/config_ho3d.yml"
+  if not os.path.exists(config_path):
+    config_path = f"{code_dir}/BundleTrack/config_ho3d.yml"
+  cfg_nerf = yaml.load(open(config_path,'r'))
   cfg_nerf['data_dir'] = '/mnt/9a72c439-d0a7-45e8-8d20-d7a235d02763/DATASET/HO3D_v3/evaluation/MPM13'
   cfg_nerf['SPDLOG'] = 1
 
