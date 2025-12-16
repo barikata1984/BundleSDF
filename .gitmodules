@@ -1,0 +1,3 @@
+[submodule "third_party/Cutie"]
+	path = third_party/Cutie
+	url = git@github.com:barikata1984/Cutie.git
