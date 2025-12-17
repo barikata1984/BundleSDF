@@ -2,7 +2,7 @@
 
 # コンテナ名を指定
 CONTAINER_NAME="bundlesdf-blackwell"
-IMAGE_NAME="bundlesdf-blackwell"
+IMAGE_NAME="bundlesdf-blackwell:latest"
 
 # マウント用のディレクトリ設定
 DIR=$(pwd)/../

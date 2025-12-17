@@ -265,9 +265,9 @@ RUN apt-get remove -y python3-blinker || true && \
     pip3 install --no-cache-dir kaolin==0.18.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html && \
     pip3 install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9" && \
     pip3 install --break-system-packages --force-reinstall blinker && \
-    pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab "jupyter-client>=8.6.0" ninja "Cython>=0.29.37" yacs && \
-    pip3 install scipy scikit-learn && \
-    pip3 install --upgrade PyOpenGL
+    pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab "jupyter-client<8" ninja "Cython>=0.29.37" yacs && \
+    pip3 install "numpy<2" scipy scikit-learn && \
+    pip3 install PyOpenGL==3.1.0
 
 
 ENV CUDA_HOME=/usr/local/cuda
@@ -284,4 +284,4 @@ RUN pip3 install --break-system-packages --force-reinstall blinker && \
     pip3 install numpy==1.26.4 transformations einops scikit-image awscli-plugin-endpoint gputil xatlas pymeshlab rtree dearpygui pytinyrenderer PyQt5 cython-npm chardet openpyxl
 
 RUN apt-get update --fix-missing && \
-    apt install -y rsync lbzip2 pigz zip p7zip-full p7zip-rar
+    apt install -y rsync lbzip2 pigz zip p7zip-full p7zip-rar libxcb-cursor0
