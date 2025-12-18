@@ -23,7 +23,7 @@ if [ "$(docker ps -aq -f name=^/${CONTAINER_NAME}$)" ]; then
 else
     echo "--------------------------------------------------"
     echo "Containers named '${CONTAINER_NAME}' was not found."
-    echo "Make and run a container withe the name."
+    echo "Make and run a container with the name."
     echo "--------------------------------------------------"
 
     # 新規作成コマンド (--name を変更し、rm は除去)

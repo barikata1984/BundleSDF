@@ -4,21 +4,26 @@ services:
       context: ..
       dockerfile: docker/dockerfile
     image: bundlesdf-blackwell
+    privileged: true
+    container_name: bundlesdf-blackwell
     runtime: nvidia
     ipc: host
     network_mode: host
     volumes:
-      - ..:/workspace/BundleSDF
+      - /home/ak/workspace/BundleSDF/:/workspace/BundleSDF
       #  - /home:/home
       #  - /mnt:/mnt
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /home/ak/.cache/huggingface:/root/.cache/huggingface
+      - /tmp/.docker.xauth:/tmp/.docker.xauth # ホストで生成する認証ファイルをマウント
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
+      - XAUTHORITY=/tmp/.docker.xauth # コンテナ内の認証ファイルのパスを指定
     working_dir: /workspace/BundleSDF
-    command: /bin/bash
+    command: tail -f /dev/null # これを追加（既存の command: /bin/bash を書き換え）
     deploy:
       resources:
         reservations:
@@ -26,3 +31,4 @@ services:
             - driver: nvidia
               count: all
               capabilities: [ gpu ]
+    shm_size: "16gb"

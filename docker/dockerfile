@@ -267,7 +267,9 @@ RUN apt-get remove -y python3-blinker || true && \
     pip3 install --break-system-packages --force-reinstall blinker && \
     pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab "jupyter-client<8" ninja "Cython>=0.29.37" yacs && \
     pip3 install "numpy<2" scipy scikit-learn && \
-    pip3 install PyOpenGL==3.1.0
+    pip3 install PyOpenGL==3.1.0 \
+    pip3 install decord
+
 
 
 ENV CUDA_HOME=/usr/local/cuda
@@ -285,3 +287,13 @@ RUN pip3 install --break-system-packages --force-reinstall blinker && \
 
 RUN apt-get update --fix-missing && \
     apt install -y rsync lbzip2 pigz zip p7zip-full p7zip-rar libxcb-cursor0
+
+# Install SAM3 and Cutie in development mode
+# Note: These will be overwritten by volume mounts at runtime for live development
+COPY third_party/sam3 /workspace/BundleSDF/third_party/sam3
+COPY third_party/Cutie /workspace/BundleSDF/third_party/Cutie
+RUN pip3 install timm>=1.0.17 ftfy==6.1.1 regex iopath>=0.1.10 && \
+    pip3 install -e /workspace/BundleSDF/third_party/sam3 && \
+    pip3 install -e /workspace/BundleSDF/third_party/Cutie
+
+WORKDIR /workspace/BundleSDF

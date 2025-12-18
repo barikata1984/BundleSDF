@@ -79,10 +79,16 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
     depth = cv2.resize(depth, (W,H), interpolation=cv2.INTER_NEAREST)
 
     if i==0:
-      mask = reader.get_mask(0)
-      mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
       if use_segmenter:
-        mask = segmenter.process(color_file, mask_numpy=mask)
+            mask = segmenter.process(color_file, first_frame=True)
+            if mask is None:
+                print("Segmentation provided no mask or requested early exit. Stopping video processing.")
+                tracker.on_finish()
+                return
+      else:
+        # Legacy/Reader mask logic
+        mask = reader.get_mask(0)
+        mask = cv2.resize(mask, (W,H), interpolation=cv2.INTER_NEAREST)
     else:
       if use_segmenter:
         mask = segmenter.process(color_file)
