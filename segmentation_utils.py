@@ -61,7 +61,15 @@ class Segmenter:
         """
         Interactively get the first frame mask using SAM3 with a text prompt.
         """
+        import subprocess
+        import time
+        import sys
+
         self._load_sam3()
+
+        viewer_script = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "utils", "view_image.py"
+        )
 
         # Load image for display and processing
         # Note: cv2.imread loads as BGR
@@ -71,31 +79,26 @@ class Segmenter:
 
         # Save image to temp file instead of using cv2.imshow to avoid GUI conflicts
         # when BundleSDF GUI is running in a separate process
-        # Saving to CWD so it is accessible from host via the mounted volume
-        temp_image_path = os.path.abspath("input_preview.png")
-        cv2.imwrite(temp_image_path, image_bgr)
+        # Encode image to bytes for pipe transfer
+        success, buffer = cv2.imencode(".png", image_bgr)
+        if not success:
+            print("Error: Could not encode image for viewer.")
+        else:
+            image_bytes = buffer.tobytes()
+            try:
+                # Use Popen with stdin=PIPE to send image data
+                proc = subprocess.Popen(
+                    ["python3", viewer_script, "stdin", "Initial Frame"],
+                    stdin=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                proc.stdin.write(image_bytes)
+                proc.stdin.close()
 
-        # Use external viewer to avoid GUI/thread conflicts in main process
-        import subprocess
-        import time
-        import sys
-
-        viewer_script = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "utils", "view_image.py"
-        )
-        try:
-            # stdin=subprocess.DEVNULL is crucial to prevent input stealing
-            # stderr=subprocess.DEVNULL suppresses "GUI started" and other backend logs
-            subprocess.Popen(
-                ["python3", viewer_script, temp_image_path, "Initial Frame"],
-                stdin=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            # Pause to let viewer initialize. 2.0s should be enough for most GUI backends to settle.
-            time.sleep(2.0)
-        except Exception as e:
-            print(f"Warning: Could not launch image viewer: {e}")
+                # Pause to let viewer initialize. 2.0s should be enough for most GUI backends to settle.
+                time.sleep(2.0)
+            except Exception as e:
+                print(f"Warning: Could not launch image viewer: {e}")
 
         # Loop until user is satisfied with the mask
         while True:
@@ -103,10 +106,7 @@ class Segmenter:
             sys.stdout.flush()
 
             print("\n" + "=" * 50)
-            print(f"Input image saved to: {temp_image_path}")
-            print(
-                "Please view this image files on your host machine to determine the prompt."
-            )
+            print("Input image displayed in popup window.")
             print(
                 "Enter a text prompt to segment the object (e.g., 'milk carton', 'hand', 'cat')"
             )
@@ -164,21 +164,26 @@ class Segmenter:
                 cv2.imwrite(raw_mask_path, raw_mask_vis)
                 print(f"Raw mask saved to: {raw_mask_path}")
 
-            preview_path = os.path.abspath("mask_result_preview.png")
-            cv2.imwrite(preview_path, vis_image)
-            print(f"Mask preview saved to: {preview_path}")
+            # Prepare visualization for viewer
+            success, buffer = cv2.imencode(".png", vis_image)
+            if success:
+                image_bytes = buffer.tobytes()
+                # Display the result mask in a separate window (non-blocking)
+                try:
+                    proc = subprocess.Popen(
+                        ["python3", viewer_script, "stdin", "Predicted Mask"],
+                        stdin=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    proc.stdin.write(image_bytes)
+                    proc.stdin.close()
 
-            # Display the result mask in a separate window (non-blocking)
-            try:
-                subprocess.Popen(
-                    ["python3", viewer_script, preview_path, "Predicted Mask"],
-                    stdin=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                # Pause to let viewer logs (Qt warnings etc) print before asking for validation
-                time.sleep(2.0)
-            except Exception as e:
-                print(f"Warning: Could not launch mask viewer: {e}")
+                    # Pause to let viewer logs (Qt warnings etc) print before asking for validation
+                    time.sleep(2.0)
+                except Exception as e:
+                    print(f"Warning: Could not launch mask viewer: {e}")
+            else:
+                print("Error: Could not encode mask preview.")
 
             # --- Validation Check ---
             # Ensure stdout is flushed so prompt appears at bottom
