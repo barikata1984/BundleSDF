@@ -1,0 +1,64 @@
+# Core Dependencies
+numpy<2
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+# --index-url https://download.pytorch.org/whl/cu128  <-- Note: pip requirements files handle index-url differently, usually via command line or pip.conf
+
+# Graphics & Rendering
+PyOpenGL==3.1.7
+kaolin==0.18.0
+# --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html
+# Installed later outside this requirements.txt since pytorch3d depends on torch
+# pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9
+trimesh
+pyrender
+pytinyrenderer
+open3d
+imageio
+matplotlib
+visdom
+kornia
+xatlas
+
+# Data & Config
+ruamel.yaml
+sacred
+pymongo
+yacs
+chardet
+openpyxl
+
+# Utilities
+tqdm
+scipy
+scikit-learn
+scikit-image
+pandas
+ninja
+Cython>=0.29.37
+transformations
+einops
+decord
+wandb
+joblib
+plyfile
+pynput
+pyyaml
+
+# GUI
+dearpygui
+PyQt5
+
+# AWS
+awscli-plugin-endpoint
+gputil
+
+# Project Specific (from third_party installs seen in scripts)
+timm>=1.0.17
+ftfy==6.1.1
+regex
+iopath>=0.1.10
+cython-npm
+rtree
+pymeshlab

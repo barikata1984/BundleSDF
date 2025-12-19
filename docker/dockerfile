@@ -57,7 +57,13 @@ RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender-dev \
     libgtk2.0-dev \
+    libgtk2.0-dev \
     qtbase5-dev \
+    # OpenGL / EGL libraries
+    libgl1-mesa-dev \
+    libegl1-mesa-dev \
+    libgles2-mesa-dev \
+    libglvnd-dev \
     # Math and science libraries
     libblas-dev \
     liblapack-dev \
@@ -119,6 +125,24 @@ RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
     freeglut3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+# Install Python packages directly with system Python to add additional conda env since docker should provide isolated environment
+COPY requirements.txt /tmp/requirements.txt
+RUN apt-get remove -y python3-blinker || true && \
+    pip3 install --upgrade --ignore-installed --break-system-packages pip setuptools wheel && \
+    pip3 install -r /tmp/requirements.txt \
+    --index-url https://download.pytorch.org/whl/cu128 \
+    --extra-index-url https://pypi.org/simple \
+    --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html \
+    --break-system-packages && \
+    # Install PyTorch3D separately as it requires torch to be pre-installed and fails if torch has not been installed properlly
+    pip3 install --no-build-isolation --break-system-packages "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9"
+
+# Add local project to PYTHONPATH for development
+ENV PYTHONPATH="${PYTHONPATH}:/workspace/BundleSDF"
 
 # Install cmake
 RUN cd / &&\
@@ -254,46 +278,18 @@ RUN cd / && \
     cd / && \
     rm -rf /cppzmq
 
+
 SHELL ["/bin/bash", "--login", "-c"]
 
-# Install Python packages directly with system Python to add additional conda env since docker should provide isolated environment
-RUN apt-get remove -y python3-blinker || true && \
-    pip3 install --upgrade --ignore-installed --break-system-packages pip setuptools wheel && \
-    # pip3 install torch==2.6.0 torchvision==0.21.0 torchaudio && \
-    pip3 install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 && \
-    #pip3 install --no-cache-dir kaolin==0.17.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu124.html && \
-    pip3 install --no-cache-dir kaolin==0.18.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html && \
-    pip3 install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9" && \
-    pip3 install --break-system-packages --force-reinstall blinker && \
-    pip3 install trimesh wandb matplotlib imageio tqdm open3d ruamel.yaml sacred kornia pymongo pyrender jupyterlab "jupyter-client<8" ninja "Cython>=0.29.37" yacs && \
-    pip3 install "numpy<2" scipy scikit-learn && \
-    pip3 install PyOpenGL==3.1.0 \
-    pip3 install decord
 
-
-
-ENV CUDA_HOME=/usr/local/cuda
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
 ENV OPENCV_IO_ENABLE_OPENEXR=1
 # Fix multiprocessing issues
 ENV PYTHONUNBUFFERED=1
 ENV OMP_NUM_THREADS=1
 
-
 RUN imageio_download_bin freeimage
-#### Kaolin will change numpy version
-RUN pip3 install --break-system-packages --force-reinstall blinker && \
-    pip3 install numpy==1.26.4 transformations einops scikit-image awscli-plugin-endpoint gputil xatlas pymeshlab rtree dearpygui pytinyrenderer PyQt5 cython-npm chardet openpyxl
-
 RUN apt-get update --fix-missing && \
     apt install -y rsync lbzip2 pigz zip p7zip-full p7zip-rar libxcb-cursor0
 
-# Install SAM3 and Cutie in development mode
-# Note: These will be overwritten by volume mounts at runtime for live development
-COPY third_party/sam3 /workspace/BundleSDF/third_party/sam3
-COPY third_party/Cutie /workspace/BundleSDF/third_party/Cutie
-RUN pip3 install timm>=1.0.17 ftfy==6.1.1 regex iopath>=0.1.10 && \
-    pip3 install -e /workspace/BundleSDF/third_party/sam3 && \
-    pip3 install -e /workspace/BundleSDF/third_party/Cutie
 
 WORKDIR /workspace/BundleSDF
