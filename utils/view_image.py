@@ -3,7 +3,7 @@ import sys
 import os
 
 
-def view_image(image_path):
+def view_image(image_path, window_title="Image Viewer"):
     if not os.path.exists(image_path):
         print(f"Error: Image not found at {image_path}")
         return
@@ -14,25 +14,27 @@ def view_image(image_path):
         print(f"Error: Could not load image {image_path}")
         return
 
-    window_name = "Input Preview (Press any key to continue)"
+    window_name = window_title
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.imshow(window_name, img)
 
-    # Wait until a key is pressed or window is closed
+    # Wait until window is closed
     print(
-        f"Displaying {image_path}. You can close the window by pressing any key or clicking the close button."
+        f"Displaying {image_path} with title '{window_title}'. Please click the window's close button (X) when finished."
     )
 
     while cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) >= 1:
-        if cv2.waitKey(100) >= 0:  # Check every 100ms
-            break
+        cv2.waitKey(100)  # Process GUI events, but ignore key presses (do not break)
 
     cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 view_image.py <image_path>")
+        print("Usage: python3 view_image.py <image_path> [window_title]")
         sys.exit(1)
 
-    view_image(sys.argv[1])
+    image_path = sys.argv[1]
+    title = sys.argv[2] if len(sys.argv) > 2 else "Image Viewer"
+
+    view_image(image_path, title)

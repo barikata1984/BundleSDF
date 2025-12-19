@@ -84,121 +84,113 @@ class Segmenter:
             os.path.dirname(os.path.abspath(__file__)), "utils", "view_image.py"
         )
         try:
-            # Use Popen to launch viewer in background (non-blocking)
-            # stdin=subprocess.DEVNULL is crucial to prevent the child process from stealing/interfering with TTY input
-            # stdout/stderr are inherited so we can see errors, but we sleep to let them flush
+            # stdin=subprocess.DEVNULL is crucial to prevent input stealing
+            # stderr=subprocess.DEVNULL suppresses "GUI started" and other backend logs
             subprocess.Popen(
-                ["python3", viewer_script, temp_image_path], stdin=subprocess.DEVNULL
+                ["python3", viewer_script, temp_image_path, "Initial Frame"],
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
 
-            # Brief pause to allow the viewer window to appear and any initial logs (like Qt warnings) to print
-            # before we print our prompt instructions. This prevents output interleaving.
-            time.sleep(1.0)
+            # Pause to let viewer initialize. 2.0s should be enough for most GUI backends to settle.
+            time.sleep(2.0)
         except Exception as e:
             print(f"Warning: Could not launch image viewer: {e}")
 
-        # Ensure stdout is flushed before printing prompt
-        sys.stdout.flush()
+        # Loop until user is satisfied with the mask
+        while True:
+            # Ensure stdout is flushed before printing prompt
+            sys.stdout.flush()
 
-        print("\n" + "=" * 50)
-        print(f"Input image saved to: {temp_image_path}")
-        print(
-            f"Please view this image files on your host machine to determine the prompt."
-        )
-        print(
-            "Enter a text prompt to segment the object (e.g., 'milk carton', 'hand', 'cat')"
-        )
-        print("=" * 50 + "\n")
-
-        prompt = input("Enter text prompt: ").strip()
-        if not prompt:
-            print("Empty prompt provided. Using default.")
-            # Depending on SAM3 behavior, empty prompt might fail or do something else.
-            # Assuming 'object' or similar generic? Or just return empty?
-            # Let's assume user provides something. If empty, warn.
-
-        # Convert to RGB for SAM3 (which uses PIL/RGB internally via set_image)
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        image_pil = Image.fromarray(image_rgb)
-
-        state = self.sam3.set_image(image_pil)
-        state = self.sam3.set_text_prompt(prompt, state)
-
-        # state["masks"] is a boolean tensor of shape [N, H, W]
-        masks = state.get("masks", None)
-
-        if masks is None or masks.numel() == 0:
-            print("No objects found by SAM3.")
-            combined_mask = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
-        else:
-            # Combine all masks into a single object (label 1)
-            # Assuming we are engaging with one object of interest which might have multiple parts
-            combined_mask = masks.any(dim=0).cpu().numpy().astype(np.uint8)
-
-        # --- Visualization and Escape ---
-        # Create user-friendly visualization
-        vis_image = image_bgr.copy()
-
-        print(
-            f"Debug: Image shape: {vis_image.shape}, Combined mask shape (raw): {combined_mask.shape}"
-        )
-
-        # Robustly handle mask shape
-        if combined_mask.ndim > 2:
-            combined_mask = combined_mask.squeeze()
-
-        if combined_mask.shape[:2] != vis_image.shape[:2]:
+            print("\n" + "=" * 50)
+            print(f"Input image saved to: {temp_image_path}")
             print(
-                f"Warning: Mask shape {combined_mask.shape} does not match image shape {vis_image.shape[:2]}. Resizing mask."
+                "Please view this image files on your host machine to determine the prompt."
             )
-            combined_mask = cv2.resize(
-                combined_mask,
-                (vis_image.shape[1], vis_image.shape[0]),
-                interpolation=cv2.INTER_NEAREST,
+            print(
+                "Enter a text prompt to segment the object (e.g., 'milk carton', 'hand', 'cat')"
             )
+            print("=" * 50 + "\n")
 
-        print(f"Debug: Final Combined mask shape: {combined_mask.shape}")
+            prompt = input("Enter text prompt: ").strip()
+            if not prompt:
+                print("Empty prompt provided. Using default.")
 
-        if combined_mask.max() > 0:
-            # Create red overlay for the object
-            red_mask = np.zeros_like(vis_image)
-            red_mask[:, :, 2] = 255  # Red channel
+            # Convert to RGB for SAM3 (which uses PIL/RGB internally via set_image)
+            image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+            image_pil = Image.fromarray(image_rgb)
 
-            # Apply mask overlay
-            mask_bool = combined_mask > 0
-            # Blend original image and red mask
-            # vis_image[mask_bool] = 0.5 * vis_image[mask_bool] + 0.5 * red_mask[mask_bool]
-            vis_image[mask_bool] = cv2.addWeighted(
-                vis_image[mask_bool], 0.5, red_mask[mask_bool], 0.5, 0
-            ).reshape(-1, 3)
-            print("Object found! Mask overlay created.")
-        else:
-            print("Result is empty (no object found). Saving raw image.")
+            state = self.sam3.set_image(image_pil)
+            state = self.sam3.set_text_prompt(prompt, state)
 
-        if combined_mask is not None:
-            raw_mask_path = os.path.abspath("mask_result_raw.png")
-            # Scale mask to 0-255 for visibility if it's boolean or 0/1
-            raw_mask_vis = (combined_mask * 255).astype(np.uint8)
-            cv2.imwrite(raw_mask_path, raw_mask_vis)
-            print(f"Raw mask saved to: {raw_mask_path}")
+            # state["masks"] is a boolean tensor of shape [N, H, W]
+            masks = state.get("masks", None)
 
-        preview_path = os.path.abspath("mask_result_preview.png")
-        cv2.imwrite(preview_path, vis_image)
-        print(f"Mask preview saved to: {preview_path}")
+            if masks is None or masks.numel() == 0:
+                print("No objects found by SAM3.")
+                combined_mask = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
+            else:
+                combined_mask = masks.any(dim=0).cpu().numpy().astype(np.uint8)
 
-        # Display the result mask in a separate window (non-blocking)
-        try:
-            subprocess.Popen(
-                ["python3", viewer_script, preview_path], stdin=subprocess.DEVNULL
-            )
-        except Exception as e:
-            print(f"Warning: Could not launch mask viewer: {e}")
+            vis_image = image_bgr.copy()
 
-        # print("Stopping execution as requested by user to inspect the mask.")
-        # Returning None to signal early exit without crashing multiprocessing
-        # The caller (process function) should handle this and return/exit gracefully
-        # return None
-        # --------------------------------
+            if combined_mask.ndim > 2:
+                combined_mask = combined_mask.squeeze()
+
+            if combined_mask.shape[:2] != vis_image.shape[:2]:
+                print(
+                    f"Warning: Mask shape {combined_mask.shape} does not match image shape {vis_image.shape[:2]}. Resizing mask."
+                )
+                combined_mask = cv2.resize(
+                    combined_mask,
+                    (vis_image.shape[1], vis_image.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+
+            if combined_mask.max() > 0:
+                red_mask = np.zeros_like(vis_image)
+                red_mask[:, :, 2] = 255  # Red channel
+                mask_bool = combined_mask > 0
+                vis_image[mask_bool] = cv2.addWeighted(
+                    vis_image[mask_bool], 0.5, red_mask[mask_bool], 0.5, 0
+                ).reshape(-1, 3)
+                print("Object found! Mask overlay created.")
+            else:
+                print("Result is empty (no object found). Saving raw image.")
+
+            if combined_mask is not None:
+                raw_mask_path = os.path.abspath("mask_result_raw.png")
+                raw_mask_vis = (combined_mask * 255).astype(np.uint8)
+                cv2.imwrite(raw_mask_path, raw_mask_vis)
+                print(f"Raw mask saved to: {raw_mask_path}")
+
+            preview_path = os.path.abspath("mask_result_preview.png")
+            cv2.imwrite(preview_path, vis_image)
+            print(f"Mask preview saved to: {preview_path}")
+
+            # Display the result mask in a separate window (non-blocking)
+            try:
+                subprocess.Popen(
+                    ["python3", viewer_script, preview_path, "Predicted Mask"],
+                    stdin=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                # Pause to let viewer logs (Qt warnings etc) print before asking for validation
+                time.sleep(2.0)
+            except Exception as e:
+                print(f"Warning: Could not launch mask viewer: {e}")
+
+            # --- Validation Check ---
+            # Ensure stdout is flushed so prompt appears at bottom
+            sys.stdout.flush()
+            print("\n" + "=" * 50)
+            valid = input("Is this mask acceptable? (y/n): ").strip().lower()
+            if valid == "y" or valid == "yes":
+                print("Mask accepted. Proceeding...")
+                break
+            else:
+                print("Mask rejected. Please try another prompt.")
+                print("=" * 50 + "\n")
 
         return (combined_mask * 255).astype(np.uint8)
 
