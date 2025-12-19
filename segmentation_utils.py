@@ -77,14 +77,28 @@ class Segmenter:
 
         # Use external viewer to avoid GUI/thread conflicts in main process
         import subprocess
+        import time
+        import sys
 
         viewer_script = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "utils", "view_image.py"
         )
         try:
-            subprocess.run(["python3", viewer_script, temp_image_path], check=False)
+            # Use Popen to launch viewer in background (non-blocking)
+            # stdin=subprocess.DEVNULL is crucial to prevent the child process from stealing/interfering with TTY input
+            # stdout/stderr are inherited so we can see errors, but we sleep to let them flush
+            subprocess.Popen(
+                ["python3", viewer_script, temp_image_path], stdin=subprocess.DEVNULL
+            )
+
+            # Brief pause to allow the viewer window to appear and any initial logs (like Qt warnings) to print
+            # before we print our prompt instructions. This prevents output interleaving.
+            time.sleep(1.0)
         except Exception as e:
             print(f"Warning: Could not launch image viewer: {e}")
+
+        # Ensure stdout is flushed before printing prompt
+        sys.stdout.flush()
 
         print("\n" + "=" * 50)
         print(f"Input image saved to: {temp_image_path}")
@@ -171,6 +185,14 @@ class Segmenter:
         preview_path = os.path.abspath("mask_result_preview.png")
         cv2.imwrite(preview_path, vis_image)
         print(f"Mask preview saved to: {preview_path}")
+
+        # Display the result mask in a separate window (non-blocking)
+        try:
+            subprocess.Popen(
+                ["python3", viewer_script, preview_path], stdin=subprocess.DEVNULL
+            )
+        except Exception as e:
+            print(f"Warning: Could not launch mask viewer: {e}")
 
         # print("Stopping execution as requested by user to inspect the mask.")
         # Returning None to signal early exit without crashing multiprocessing

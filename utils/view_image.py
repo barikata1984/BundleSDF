@@ -18,11 +18,15 @@ def view_image(image_path):
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     cv2.imshow(window_name, img)
 
-    # Wait until a key is pressed
+    # Wait until a key is pressed or window is closed
     print(
-        f"Displaying {image_path}. Focus the window and press any key to allow the main script to proceed..."
+        f"Displaying {image_path}. You can close the window by pressing any key or clicking the close button."
     )
-    cv2.waitKey(0)
+
+    while cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) >= 1:
+        if cv2.waitKey(100) >= 0:  # Check every 100ms
+            break
+
     cv2.destroyAllWindows()
 
 
