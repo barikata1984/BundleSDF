@@ -45,6 +45,7 @@ joblib
 plyfile
 pynput
 pyyaml
+psutil
 
 # GUI
 dearpygui

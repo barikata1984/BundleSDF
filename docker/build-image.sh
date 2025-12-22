@@ -14,10 +14,6 @@ echo "Starting Docker build for ${IMAGE_NAME}:${TAG}"
 echo "Context path: $(realpath ${CONTEXT_PATH})"
 echo "--------------------------------------------------"
 
-# Xauthority ファイルの準備（GUI用：ビルド前に行っておくと確実）
-touch /tmp/.docker.xauth
-xauth nlist $DISPLAY | sed -e 's/^..../ffff/' | xauth -f /tmp/.docker.xauth nmerge - 2>/dev/null
-
 # Docker Build の実行
 # --no-cache を付けたい場合は引数で調整可能にする
 docker build \
