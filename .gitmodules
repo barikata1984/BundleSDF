@@ -1,3 +1,6 @@
 [submodule "third_party/Cutie"]
 	path = third_party/Cutie
 	url = git@github.com:barikata1984/Cutie.git
+[submodule "third_party/sam3"]
+	path = third_party/sam3
+	url = git@github.com:barikata1984/sam3.git

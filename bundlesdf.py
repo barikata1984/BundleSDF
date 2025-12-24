@@ -52,7 +52,7 @@ def set_bundlesdf_precision(use_full_precision: bool = True) -> torch.dtype:
         # Force full precision (safest option for pose tracking)
         torch.set_default_dtype(torch.float32)
         if torch.cuda.is_available():
-            torch.set_default_tensor_type(torch.cuda.FloatTensor)
+            torch.set_default_device("cuda")
         logging.info("Set PyTorch to use full precision (float32) for BundleSDF")
     return torch.get_default_dtype()
 
@@ -1570,7 +1570,8 @@ class BundleSdf:
 
 if __name__ == "__main__":
     set_seed(0)
-    torch.set_default_tensor_type("torch.cuda.FloatTensor")
+    torch.set_default_dtype(torch.float32)
+    torch.set_default_device("cuda")
 
     config_path = f"{code_dir}/third_party/BundleTrack/config_ho3d.yml"
     if not os.path.exists(config_path):

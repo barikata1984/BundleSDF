@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: docker/dockerfile
+      args:
+        BASE_IMAGE: osx_robot_env:22-12-2025
     image: bundlesdf-blackwell
     privileged: true
     container_name: bundlesdf-blackwell

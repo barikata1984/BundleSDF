@@ -1,5 +1,5 @@
-#FROM nvcr.io/nvidia/deepstream:7.1-triton-multiarch
-FROM nvcr.io/nvidia/deepstream:8.0-triton-multiarch
+ARG BASE_IMAGE=osx_robot_env:22-12-2025
+FROM ${BASE_IMAGE}
 
 ARG CMAKE_VERSION_MAJOR=3
 ARG CMAKE_VERSION_MINOR=25
@@ -132,17 +132,16 @@ ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/torch/lib:/usr/local
 # Install Python packages directly with system Python to add additional conda env since docker should provide isolated environment
 COPY requirements.txt /tmp/requirements.txt
 RUN apt-get remove -y python3-blinker || true && \
-    pip3 install --upgrade --ignore-installed --break-system-packages pip setuptools wheel && \
-    pip3 install -r /tmp/requirements.txt \
+    pip3 install --upgrade --ignore-installed pip setuptools wheel && \
+    pip3 install --ignore-installed -r /tmp/requirements.txt \
     --index-url https://download.pytorch.org/whl/cu128 \
     --extra-index-url https://pypi.org/simple \
-    --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html \
-    --break-system-packages && \
+    --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html && \
     # Install PyTorch3D separately as it requires torch to be pre-installed and fails if torch has not been installed properlly
-    pip3 install --no-build-isolation --break-system-packages "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9"
+    pip3 install --no-build-isolation "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9"
 
 # Add local project to PYTHONPATH for development
-ENV PYTHONPATH="${PYTHONPATH}:/workspace/BundleSDF"
+ENV PYTHONPATH="/root/osx-ur/underlay_ws/src/third_party/BundleSDF"
 
 # Install cmake
 RUN cd / &&\
@@ -279,7 +278,7 @@ RUN cd / && \
     rm -rf /cppzmq
 
 
-# SHELL ["/bin/bash", "--login", "-c"]
+#SHELL ["/bin/bash", "--login", "-c"]
 
 
 ENV OPENCV_IO_ENABLE_OPENEXR=1
@@ -290,5 +289,6 @@ ENV OMP_NUM_THREADS=1
 RUN imageio_download_bin freeimage
 RUN apt-get update --fix-missing && \
     apt install -y rsync lbzip2 pigz zip p7zip-full p7zip-rar libxcb-cursor0
+
 
 # WORKDIR /workspace/BundleSDF

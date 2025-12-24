@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="2">
+    <name>bundlesdf</name>
+    <version>0.1.0</version>
+    <description>
+    BundleSDF ROS wrapper for 6-DoF object pose tracking using RGB-D data.
+    Subscribes to RealSense camera topics and publishes tracked object pose.
+    </description>
+
+    <maintainer email="you@example.com">Your Name</maintainer>
+    <license>NVIDIA Proprietary</license>
+
+    <buildtool_depend>catkin</buildtool_depend>
+
+    <!-- ROS core -->
+    <depend>rospy</depend>
+    <depend>std_msgs</depend>
+    <depend>sensor_msgs</depend>
+    <depend>geometry_msgs</depend>
+
+    <!-- Image processing -->
+    <depend>cv_bridge</depend>
+    <depend>image_transport</depend>
+    <depend>message_filters</depend>
+
+    <!-- TF -->
+    <depend>tf</depend>
+    <depend>tf2_ros</depend>
+
+    <export>
+    </export>
+</package>
