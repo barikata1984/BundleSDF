@@ -8,9 +8,13 @@ if [ -d "$XAUTH" ]; then
 fi
 if [ ! -f $XAUTH ]; then
     touch $XAUTH
-    xauth_list=$(xauth nlist :0 | sed -e 's/^..../ffff/')
+    # Use current DISPLAY, fallback to :0 if not set
+    DISPLAY_NUM=${DISPLAY:-:0}
+    xauth_list=$(xauth nlist $DISPLAY_NUM | sed -e 's/^..../ffff/')
     if [ ! -z "$xauth_list" ]; then
         echo $xauth_list | xauth -f $XAUTH nmerge -
     fi
     chmod a+r $XAUTH
 fi
+
+xhost +local:docker  # Docker からの接続
