@@ -12,9 +12,9 @@ services:
     ipc: host
     network_mode: host
     volumes:
-      - /home/ak/workspace/BundleSDF/:/workspace/BundleSDF
+      - /home/atsushi/workspace/BundleSDF/:/workspace/BundleSDF
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - /home/ak/.cache/huggingface:/root/.cache/huggingface
+      - /home/atsushi/.cache/huggingface:/root/.cache/huggingface
       - /tmp/.docker.xauth:/tmp/.docker.xauth # ホストで生成する認証ファイルをマウント
     environment:
       - DISPLAY=${DISPLAY}

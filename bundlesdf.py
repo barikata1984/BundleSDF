@@ -530,70 +530,86 @@ def run_nerf(
             nerf_ms = (t_nerf_end - t_nerf_start) * 1000.0
             logging.info(f"Training done, latest nerf frame {frame_id}")
 
-            # Write timing stats for processed frames
-            nerf_ms_per_frame = nerf_ms / nerf_num_frames if nerf_num_frames > 0 else 0
+            # Post-training processing with Manager access protection
+            # Manager may be terminated if main process has already exited
+            try:
+                # Check if we should exit before accessing shared Manager objects
+                with lock:
+                    if p_dict["join"]:
+                        logging.info(f"Join signal received after training frame {frame_id}, exiting loop")
+                        p_dict["running"] = False
+                        break
 
-            if enable_timing_log:
-                with log_lock:
-                    if frame_id in timing_buffer:
-                        data = timing_buffer.pop(frame_id)
-                        with open(
-                            os.path.join(debug_dir, "timing_stats.csv"), "a"
-                        ) as f:
-                            f.write(
-                                f"{data['timestamp']},{frame_id},{data['total_ms']:.1f},{data['fm_prep_ms']:.1f},{data['fm_2d_match_ms']:.1f},{data['fm_corres_ms']:.1f},{data['fm_ransac_ms']:.1f},{data['ba_ms']:.1f},{data['others_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n"
-                            )
-                    else:
-                        with open(
-                            os.path.join(debug_dir, "timing_stats.csv"), "a"
-                        ) as f:
-                            f.write(
-                                f"{time.time()},{frame_id},n/a,n/a,n/a,n/a,n/a,n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n"
-                            )
+                # Write timing stats for processed frames
+                nerf_ms_per_frame = nerf_ms / nerf_num_frames if nerf_num_frames > 0 else 0
 
-            optimized_cvcam_in_obs, offset = get_optimized_poses_in_real_world(
-                poses,
-                nerf.models["pose_array"],
-                cfg_nerf["sc_factor"],
-                cfg_nerf["translation"],
-            )
+                if enable_timing_log:
+                    with log_lock:
+                        if frame_id in timing_buffer:
+                            data = timing_buffer.pop(frame_id)
+                            with open(
+                                os.path.join(debug_dir, "timing_stats.csv"), "a"
+                            ) as f:
+                                f.write(
+                                    f"{data['timestamp']},{frame_id},{data['total_ms']:.1f},{data['fm_prep_ms']:.1f},{data['fm_2d_match_ms']:.1f},{data['fm_corres_ms']:.1f},{data['fm_ransac_ms']:.1f},{data['ba_ms']:.1f},{data['others_ms']:.1f},{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n"
+                                )
+                        else:
+                            with open(
+                                os.path.join(debug_dir, "timing_stats.csv"), "a"
+                            ) as f:
+                                f.write(
+                                    f"{time.time()},{frame_id},n/a,n/a,n/a,n/a,n/a,n/a,n/a,{nerf_ms:.1f},{nerf_num_frames},{nerf_ms_per_frame:.1f}\n"
+                                )
 
-            logging.info("Getting mesh")
-            mesh = nerf.extract_mesh(isolevel=0, voxel_size=cfg_nerf["mesh_resolution"])
-            mesh = mesh_to_real_world(
-                mesh,
-                pose_offset=offset,
-                translation=nerf.cfg["translation"],
-                sc_factor=nerf.cfg["sc_factor"],
-            )
-
-            with lock:
-                p_dict["optimized_cvcam_in_obs"] = optimized_cvcam_in_obs
-                p_dict["running"] = False
-                p_dict["mesh"] = mesh
-
-            logging.info(f"nerf done at frame {frame_id}")
-
-            prev_pcd_real_scale = copy.deepcopy(pcd_real_scale)
-
-            ####### Log
-            if SPDLOG >= 2:
-                os.system(f"cp -r {cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
-                with open(f"{out_dir}/config.yml", "w") as ff:
-                    tmp = copy.deepcopy(cfg_nerf)
-                    for k in tmp.keys():
-                        if isinstance(tmp[k], np.ndarray):
-                            tmp[k] = tmp[k].tolist()
-                    yaml.dump(tmp, ff)
-                shutil.copy(f"{out_dir}/config.yml", f"{cfg_nerf['save_dir']}/")
-                np.savetxt(
-                    f"{debug_dir}/{frame_id}/poses_after_nerf.txt",
-                    np.array(optimized_cvcam_in_obs).reshape(-1, 4),
+                optimized_cvcam_in_obs, offset = get_optimized_poses_in_real_world(
+                    poses,
+                    nerf.models["pose_array"],
+                    cfg_nerf["sc_factor"],
+                    cfg_nerf["translation"],
                 )
-                mesh.export(f"{cfg_nerf['save_dir']}/mesh_real_world.obj")
-                os.system(
-                    f"rm -rf {cfg_nerf['save_dir']}/step_*_mesh_real_world.obj {cfg_nerf['save_dir']}/*frame*ray*.ply && mv {cfg_nerf['save_dir']}/*  {out_dir}/"
+
+                logging.info("Getting mesh")
+                mesh = nerf.extract_mesh(isolevel=0, voxel_size=cfg_nerf["mesh_resolution"])
+                mesh = mesh_to_real_world(
+                    mesh,
+                    pose_offset=offset,
+                    translation=nerf.cfg["translation"],
+                    sc_factor=nerf.cfg["sc_factor"],
                 )
+
+                with lock:
+                    p_dict["optimized_cvcam_in_obs"] = optimized_cvcam_in_obs
+                    p_dict["running"] = False
+                    p_dict["mesh"] = mesh
+
+                logging.info(f"nerf done at frame {frame_id}")
+
+                prev_pcd_real_scale = copy.deepcopy(pcd_real_scale)
+
+                ####### Log
+                if SPDLOG >= 2:
+                    os.system(f"cp -r {cfg_nerf['save_dir']}/image_step_*.png  {out_dir}/")
+                    with open(f"{out_dir}/config.yml", "w") as ff:
+                        tmp = copy.deepcopy(cfg_nerf)
+                        for k in tmp.keys():
+                            if isinstance(tmp[k], np.ndarray):
+                                tmp[k] = tmp[k].tolist()
+                        yaml.dump(tmp, ff)
+                    shutil.copy(f"{out_dir}/config.yml", f"{cfg_nerf['save_dir']}/")
+                    np.savetxt(
+                        f"{debug_dir}/{frame_id}/poses_after_nerf.txt",
+                        np.array(optimized_cvcam_in_obs).reshape(-1, 4),
+                    )
+                    mesh.export(f"{cfg_nerf['save_dir']}/mesh_real_world.obj")
+                    os.system(
+                        f"rm -rf {cfg_nerf['save_dir']}/step_*_mesh_real_world.obj {cfg_nerf['save_dir']}/*frame*ray*.ply && mv {cfg_nerf['save_dir']}/*  {out_dir}/"
+                    )
+
+            except (BrokenPipeError, ConnectionRefusedError, EOFError, OSError) as e:
+                # Manager has been terminated, exit gracefully
+                logging.warning(f"Manager terminated during post-training processing for frame {frame_id}: {e}")
+                logging.info("Exiting NeRF process gracefully")
+                break
 
     except Exception:
         import traceback
@@ -601,8 +617,11 @@ def run_nerf(
         with open("/tmp/nerf_runner_crash.log", "w") as f:
             f.write(traceback.format_exc())
         logging.exception("NerfRunner Process Crashed")
-        with lock:
-            p_dict["running"] = False
+        try:
+            with lock:
+                p_dict["running"] = False
+        except (BrokenPipeError, ConnectionRefusedError, EOFError):
+            logging.warning("Could not update p_dict['running'] - Manager may have terminated")
 
 
 class BundleSdf:

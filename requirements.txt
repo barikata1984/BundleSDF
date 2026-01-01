@@ -33,7 +33,7 @@ openpyxl
 tqdm
 scipy
 scikit-learn
-scikit-image
+scikit-image>=0.22.0
 pandas
 ninja
 Cython>=0.29.37
