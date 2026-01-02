@@ -49,15 +49,58 @@ class ELoftrRunner:
     @rgbBs: (N,H,W,C) - batch of target images
     @return: list of correspondences for each pair, each (M,5) with [x0,y0,x1,y1,conf]
     '''
-    image0 = torch.from_numpy(rgbAs).permute(0,3,1,2).float().cuda()
-    image1 = torch.from_numpy(rgbBs).permute(0,3,1,2).float().cuda()
+    # Ensure input has batch dimension (N, H, W, C)
+    if rgbAs.ndim == 3:
+      rgbAs = rgbAs[np.newaxis, ...]
+    if rgbBs.ndim == 3:
+      rgbBs = rgbBs[np.newaxis, ...]
+    
+    logging.info(f"[eloftr_wrapper.py] Input shapes: rgbAs={rgbAs.shape}, rgbBs={rgbBs.shape}")
+    
+    # Store original dimensions for coordinate scaling
+    orig_h, orig_w = rgbAs.shape[1], rgbAs.shape[2]
+    
+    # EfficientLoFTR requires image dimensions to be divisible by 32
+    new_h = (orig_h // 32) * 32
+    new_w = (orig_w // 32) * 32
+    
+    # Ensure minimum size
+    new_h = max(new_h, 32)
+    new_w = max(new_w, 32)
+    
+    logging.info(f"[eloftr_wrapper.py] Resizing: {orig_h}x{orig_w} -> {new_h}x{new_w}")
+    
+    # Resize images if needed
+    # Resize images if needed
+    if new_h != orig_h or new_w != orig_w:
+      rgbAs_resized = np.stack([cv2.resize(img, (new_w, new_h)) for img in rgbAs], axis=0)
+      rgbBs_resized = np.stack([cv2.resize(img, (new_w, new_h)) for img in rgbBs], axis=0)
+      
+      # Restore channel dimension if dropped (happens when C=1)
+      if rgbAs_resized.ndim == 3:
+        rgbAs_resized = rgbAs_resized[..., np.newaxis]
+      if rgbBs_resized.ndim == 3:
+        rgbBs_resized = rgbBs_resized[..., np.newaxis]
+        
+      scale_x = orig_w / new_w
+      scale_y = orig_h / new_h
+    else:
+      rgbAs_resized = rgbAs
+      rgbBs_resized = rgbBs
+      scale_x = 1.0
+      scale_y = 1.0
+    
+    logging.info(f"[eloftr_wrapper.py] After resize: rgbAs_resized={rgbAs_resized.shape}")
+    
+    image0 = torch.from_numpy(rgbAs_resized).permute(0,3,1,2).float().cuda()
+    image1 = torch.from_numpy(rgbBs_resized).permute(0,3,1,2).float().cuda()
     if image0.shape[-1]==3:
       image0 = torchvision.transforms.functional.rgb_to_grayscale(image0)
       image1 = torchvision.transforms.functional.rgb_to_grayscale(image1)
     image0 = image0/255.0
     image1 = image1/255.0
     last_data = {'image0': image0, 'image1': image1}
-    logging.info(f"image0: {last_data['image0'].shape}")
+    logging.info(f"[eloftr_wrapper.py] image0: {last_data['image0'].shape}")
 
     batch_size = 64
     ret_keys = ['mkpts0_f','mkpts1_f','mconf','m_bids']
@@ -84,6 +127,13 @@ class ELoftrRunner:
     mkpts1 = last_data['mkpts1_f'].cpu().numpy()
     mconf = last_data['mconf'].cpu().numpy()
     pair_ids = last_data['m_bids'].cpu().numpy()
+    
+    # Scale keypoints back to original image coordinates
+    mkpts0[:, 0] *= scale_x
+    mkpts0[:, 1] *= scale_y
+    mkpts1[:, 0] *= scale_x
+    mkpts1[:, 1] *= scale_y
+    
     logging.info(f"mconf, {mconf.min()} {mconf.max()}")
     logging.info(f'pair_ids {pair_ids.shape}')
     corres = np.concatenate((mkpts0.reshape(-1,2),mkpts1.reshape(-1,2),mconf.reshape(-1,1)),axis=-1).reshape(-1,5).astype(np.float32)

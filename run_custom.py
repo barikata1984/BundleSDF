@@ -15,7 +15,7 @@ sys.path.append(code_dir)
 from segmentation_utils import Segmenter
 
 
-def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False):
+def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_folder='/home/bowen/debug/bundlesdf_2022-11-18-15-10-24_milk/', use_segmenter=False, use_gui=False, model_2d_match='eloftr'):
   set_seed(0)
 
   os.system(f'rm -rf {out_folder} && mkdir -p {out_folder}')
@@ -64,7 +64,7 @@ def run_one_video(video_dir='/home/bowen/debug/2022-11-18-15-10-24_milk', out_fo
   if use_segmenter:
     segmenter = Segmenter()
 
-  tracker = BundleSdf(cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5, use_gui=use_gui)
+  tracker = BundleSdf(cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5, use_gui=use_gui, model_2d_match=model_2d_match)
 
   reader = YcbineoatReader(video_dir=video_dir, shorter_side=480)
 
@@ -219,10 +219,11 @@ if __name__=="__main__":
   parser.add_argument('--use_gui', type=int, default=1)
   parser.add_argument('--stride', type=int, default=1, help='interval of frames to run; 1 means using every frame')
   parser.add_argument('--debug_level', type=int, default=2, help='higher means more logging')
+  parser.add_argument('--2d_feat_match', type=str, default="eloftr", help='loftr/eloftr')
   args = parser.parse_args()
 
   if args.mode=='run_video':
-    run_one_video(video_dir=args.video_dir, out_folder=args.out_folder, use_segmenter=args.use_segmenter, use_gui=args.use_gui)
+    run_one_video(video_dir=args.video_dir, out_folder=args.out_folder, use_segmenter=args.use_segmenter, use_gui=args.use_gui, model_2d_match=getattr(args, '2d_feat_match'))
   elif args.mode=='global_refine':
     run_one_video_global_nerf(out_folder=args.out_folder)
   elif args.mode=='draw_pose':

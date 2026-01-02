@@ -138,6 +138,8 @@ RUN apt-get remove -y python3-blinker || true && \
     --extra-index-url https://pypi.org/simple \
     --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html \
     --break-system-packages && \
+    # Install pyrender with --no-deps to bypass strict PyOpenGL 3.1.0 requirement (we use 3.1.10)
+    pip3 install --no-deps --break-system-packages "pyrender==0.1.45" && \
     # Install PyTorch3D separately as it requires torch to be pre-installed and fails if torch has not been installed properlly
     pip3 install --no-build-isolation --break-system-packages "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9"
 

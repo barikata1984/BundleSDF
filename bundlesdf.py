@@ -17,6 +17,7 @@ import my_cpp
 from gui import *
 from third_party.BundleTrack.scripts.data_reader import *
 from Utils import *
+from eloftr_wrapper import ELoftrRunner
 from loftr_wrapper import LoftrRunner
 import multiprocessing, threading
 import torch
@@ -633,6 +634,7 @@ class BundleSdf:
         translation=None,
         sc_factor=None,
         use_gui=False,
+        model_2d_match="eloftr",
     ):
         # Initialize tensor precision management first
         self.tensor_dtype = set_bundlesdf_precision(use_full_precision=True)
@@ -736,7 +738,12 @@ class BundleSdf:
 
         yml = my_cpp.YamlLoadFile(cfg_track_dir)
         self.bundler = my_cpp.Bundler(yml)
-        self.loftr = LoftrRunner()
+        if model_2d_match == "loftr":
+            logging.info("Using LoFTR (original) matcher")
+            self.loftr = LoftrRunner()
+        else:
+            logging.info("Using EfficientLoFTR matcher")
+            self.loftr = ELoftrRunner()
         self.cnt = -1
         self.K = None
         self.mesh = None

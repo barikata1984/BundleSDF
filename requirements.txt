@@ -6,19 +6,20 @@ torchaudio==2.8.0
 # --index-url https://download.pytorch.org/whl/cu128  <-- Note: pip requirements files handle index-url differently, usually via command line or pip.conf
 
 # Graphics & Rendering
-PyOpenGL==3.1.7
+PyOpenGL==3.1.10
+PyOpenGL-accelerate==3.1.10
 kaolin==0.18.0
 # --find-links https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.8.0_cu128.html
 # Installed later outside this requirements.txt since pytorch3d depends on torch
 # pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@v0.7.9
 trimesh
-pyrender
+# pyrender>=0.1.45 # Installed in Dockerfile with --no-deps to bypass PyOpenGL strict check
 pytinyrenderer
 open3d
 imageio
 matplotlib
 visdom
-kornia
+kornia>=0.7.0
 xatlas
 
 # Data & Config
@@ -57,6 +58,8 @@ gputil
 
 # Project Specific (from third_party installs seen in scripts)
 timm>=1.0.17
+loguru>=0.7.3
+pytorch-lightning>=2.6.0
 ftfy==6.1.1
 regex
 iopath>=0.1.10
