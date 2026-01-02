@@ -6,4 +6,5 @@
 	url = git@github.com:barikata1984/sam3.git
 [submodule "third_party/BundleTrack/EfficientLoFTR"]
 	path = third_party/BundleTrack/EfficientLoFTR
-	url = https://github.com/zju3dv/EfficientLoFTR
+	url = git@github.com:barikata1984/EfficientLoFTR.git
+	branch = dev-bundlesdf
