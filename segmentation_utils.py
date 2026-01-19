@@ -57,9 +57,14 @@ class Segmenter:
                 raise e
         return self.sam3
 
-    def get_first_frame_mask(self, image_path):
+    def get_first_frame_mask(self, image_path, target_object=""):
         """
-        Interactively get the first frame mask using SAM3 with a text prompt.
+        Get the first frame mask using SAM3 with a text prompt.
+
+        Args:
+            image_path: Path to the image file.
+            target_object: Optional text prompt for segmentation. If provided,
+                           skips stdin input and uses this directly.
         """
         import subprocess
         import time
@@ -100,21 +105,33 @@ class Segmenter:
             except Exception as e:
                 print(f"Warning: Could not launch image viewer: {e}")
 
+        # Use provided target_object as initial prompt, or None to trigger stdin
+        initial_prompt = target_object.strip() if target_object else None
+
         # Loop until user is satisfied with the mask
         while True:
             # Ensure stdout is flushed before printing prompt
             sys.stdout.flush()
 
-            print("\n" + "=" * 50)
-            print("Input image displayed in popup window.")
-            print(
-                "Enter a text prompt to segment the object (e.g., 'milk carton', 'hand', 'cat')"
-            )
-            print("=" * 50 + "\n")
+            if initial_prompt:
+                # Use the CLI-provided target object (first iteration only)
+                prompt = initial_prompt
+                print("\n" + "=" * 50)
+                print(f"Using CLI-provided target object: '{prompt}'")
+                print("=" * 50 + "\n")
+                initial_prompt = None  # Clear so next iteration uses stdin
+            else:
+                # Interactive mode: ask user for input
+                print("\n" + "=" * 50)
+                print("Input image displayed in popup window.")
+                print(
+                    "Enter a text prompt to segment the object (e.g., 'milk carton', 'hand', 'cat')"
+                )
+                print("=" * 50 + "\n")
 
-            prompt = input("Enter text prompt: ").strip()
-            if not prompt:
-                print("Empty prompt provided. Using default.")
+                prompt = input("Enter text prompt: ").strip()
+                if not prompt:
+                    print("Empty prompt provided. Using default.")
 
             # Convert to RGB for SAM3 (which uses PIL/RGB internally via set_image)
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)

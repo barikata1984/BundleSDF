@@ -46,6 +46,9 @@ class BundleSdfNode:
         self.frame_stride = rospy.get_param("~frame_stride", 1)
         self.debug_level = rospy.get_param("~debug_level", 2)
 
+        # Target object for segmentation (optional: if set, skips interactive prompt)
+        self.target_object = rospy.get_param("~target_object", "")
+
         # Frame ID for published pose
         self.camera_frame_id = rospy.get_param(
             "~camera_frame_id", "camera_color_optical_frame"
@@ -243,9 +246,11 @@ class BundleSdfNode:
                     temp_path = "/tmp/bundlesdf_first_frame.png"
                     cv2.imwrite(temp_path, color)
 
-                    # Get mask from SAM3 with interactive text prompt
-                    # This will block and wait for user input via stdin
-                    mask = self.segmenter.get_first_frame_mask(temp_path)
+                    # Get mask from SAM3 with text prompt
+                    # If target_object is set, use it directly; otherwise prompt via stdin
+                    mask = self.segmenter.get_first_frame_mask(
+                        temp_path, target_object=self.target_object
+                    )
 
                     if mask is None:
                         rospy.logwarn("SAM3 returned no mask. Using full-image mask.")

@@ -19,6 +19,10 @@
     <arg name="camera_frame_id" default="camera_color_optical_frame"/>
     <arg name="object_frame_id" default="tracked_object"/>
 
+    <!-- Target object for segmentation (optional) -->
+    <!-- If provided, skips interactive prompt and uses this text for SAM3 segmentation -->
+    <arg name="target_object" default=""/>
+
     <!-- BundleSDF Node -->
     <node name="bundlesdf_node" pkg="bundlesdf" type="bundlesdf_node.py" output="screen">
         <!-- Topic remappings -->
@@ -37,6 +41,9 @@
         <!-- Frame IDs -->
         <param name="camera_frame_id" value="$(arg camera_frame_id)"/>
         <param name="object_frame_id" value="$(arg object_frame_id)"/>
+
+        <!-- Target object for segmentation -->
+        <param name="target_object" value="$(arg target_object)" if="$(eval target_object != '')"/>
     </node>
 
 </launch>
