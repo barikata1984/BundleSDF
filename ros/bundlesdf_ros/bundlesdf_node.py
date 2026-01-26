@@ -16,6 +16,7 @@ import yaml
 
 import rospy
 from sensor_msgs.msg import Image, CameraInfo
+from std_msgs.msg import Bool
 from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
 import message_filters
@@ -88,6 +89,9 @@ class BundleSdfNode:
 
         # Publisher
         self.pose_pub = rospy.Publisher("~object_pose", PoseStamped, queue_size=10)
+        self.object_targeted_pub = rospy.Publisher(
+            "/object_targeted", Bool, queue_size=1, latch=True
+        )
 
         # Setup config and tracker
         self._setup_tracker()
@@ -189,6 +193,9 @@ class BundleSdfNode:
             self.K = np.array(msg.K).reshape(3, 3)
             rospy.loginfo(f"Camera intrinsics received:\n{self.K}")
 
+    # === === === ===
+    # Callback function executed at listening of new camera frame
+    # === === === ===
     def _rgbd_callback(self, color_msg, depth_msg):
         """Process synchronized RGB-D messages."""
         if self.K is None:
@@ -249,7 +256,9 @@ class BundleSdfNode:
                     # Get mask from SAM3 with text prompt
                     # If target_object is set, use it directly; otherwise prompt via stdin
                     mask = self.segmenter.get_first_frame_mask(
-                        temp_path, target_object=self.target_object
+                        temp_path,
+                        target_object=self.target_object,
+                        wait_for_robot_home=True,
                     )
 
                     if mask is None:
@@ -262,6 +271,10 @@ class BundleSdfNode:
                                 mask, (W, H), interpolation=cv2.INTER_NEAREST
                             )
                         rospy.loginfo(f"SAM3 mask obtained. Shape: {mask.shape}")
+
+                    # Publish object_targeted after mask is accepted
+                    self.object_targeted_pub.publish(Bool(True))
+                    rospy.loginfo("Object targeted. Published /object_targeted = True")
 
                     self.first_mask = mask
                     self.first_frame_processed = True
@@ -314,6 +327,8 @@ class BundleSdfNode:
             if len(self.tracker.bundler._keyframes) > 0:
                 latest_frame = self.tracker.bundler._keyframes[-1]
                 pose_matrix = np.array(latest_frame._pose_in_model)
+                # Invert to get Object Pose in Camera Frame (ob_in_cam)
+                pose_matrix = np.linalg.inv(pose_matrix)
 
                 # Publish pose
                 self._publish_pose(pose_matrix, color_msg.header.stamp)

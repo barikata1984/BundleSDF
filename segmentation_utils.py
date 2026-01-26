@@ -57,7 +57,9 @@ class Segmenter:
                 raise e
         return self.sam3
 
-    def get_first_frame_mask(self, image_path, target_object=""):
+    def get_first_frame_mask(
+        self, image_path, target_object="", wait_for_robot_home=False
+    ):
         """
         Get the first frame mask using SAM3 with a text prompt.
 
@@ -65,12 +67,35 @@ class Segmenter:
             image_path: Path to the image file.
             target_object: Optional text prompt for segmentation. If provided,
                            skips stdin input and uses this directly.
+            wait_for_robot_home: If True, wait for /robot_at_home topic to be True
+                                 before proceeding. Requires ROS environment.
         """
         import subprocess
         import time
         import sys
 
         self._load_sam3()
+
+        # === ROS robot_at_home 待機 (オプション) ===
+        if wait_for_robot_home:
+            try:
+                import rospy
+                from std_msgs.msg import Bool
+
+                rospy.loginfo("Waiting for /robot_at_home to be True...")
+                msg = rospy.wait_for_message("/robot_at_home", Bool, timeout=120)
+                if msg.data:
+                    rospy.loginfo("Robot is at home. Proceeding with segmentation.")
+                else:
+                    rospy.logwarn(
+                        "Received False from /robot_at_home, but proceeding anyway."
+                    )
+            except ImportError:
+                print("Warning: rospy not available. Skipping robot_at_home check.")
+            except Exception as e:
+                print(
+                    f"Warning: Could not wait for /robot_at_home: {e}. Proceeding anyway."
+                )
 
         viewer_script = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "utils", "view_image.py"
