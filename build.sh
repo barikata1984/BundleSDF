@@ -30,11 +30,15 @@ pip3 install -e ${ROOT}/third_party/Cutie
 # 4. mycuda のビルドとインストール
 echo "Building mycuda..."
 cd ${ROOT}/mycuda && rm -rf build *egg* && python3 -m pip install -e . 
+# Use the following when build artifacts are left
+#cd ${ROOT}/mycuda && python3 -m pip install -e .  
 
 # 5. BundleTrack (C++ライブラリ) のビルド
 echo "Building BundleTrack C++ libraries..."
 cd ${ROOT}/third_party/BundleTrack && rm -rf build && mkdir build && cd build && cmake .. && make -j$(nproc)
-
+# Use the following when build artifacts are left
+#cd ${ROOT}/third_party/BundleTrack && mkdir -p build && cd build && cmake .. && make -j$(nproc)
+ 
 echo "--------------------------------------------------"
 echo "Build process completed successfully."
 echo "--------------------------------------------------"

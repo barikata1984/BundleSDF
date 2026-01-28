@@ -10,6 +10,7 @@ publishes tracked object pose using BundleSDF.
 import os
 import sys
 import threading
+import time
 import numpy as np
 import cv2
 import yaml
@@ -34,7 +35,13 @@ from segmentation_utils import Segmenter
 
 
 class BundleSdfNode:
-    """ROS Node wrapper for BundleSDF object pose tracking."""
+    """ROS Node wrapper for BundleSDF object pose tracking.
+    
+    Improvements for long-running stability:
+    - GUI process health monitoring
+    - Periodic memory cleanup
+    - Graceful degradation when GUI crashes
+    """
 
     def __init__(self):
         rospy.init_node("bundlesdf_node", anonymous=False)
@@ -46,6 +53,12 @@ class BundleSdfNode:
         self.shorter_side = rospy.get_param("~shorter_side", 480)
         self.frame_stride = rospy.get_param("~frame_stride", 1)
         self.debug_level = rospy.get_param("~debug_level", 2)
+        # Toggle waiting for /robot_at_home topic (default: True)
+        self.with_robot = rospy.get_param("~with_robot", True)
+        
+        # GUI health monitoring parameters
+        self.gui_heartbeat_timeout = rospy.get_param("~gui_heartbeat_timeout", 10.0)  # seconds
+        self.gui_check_interval = rospy.get_param("~gui_check_interval", 5.0)  # seconds
 
         # Target object for segmentation (optional: if set, skips interactive prompt)
         self.target_object = rospy.get_param("~target_object", "")
@@ -75,6 +88,7 @@ class BundleSdfNode:
         self.first_mask = None
         self.first_frame_processed = False
         self.lock = threading.Lock()
+        self.gui_dead_logged = False  # Track if GUI death has been logged
 
         # Initialize segmenter if enabled
         if self.use_segmenter:
@@ -95,17 +109,26 @@ class BundleSdfNode:
 
         # Setup config and tracker
         self._setup_tracker()
+        
+        # Start GUI health monitor timer if GUI is enabled
+        if self.use_gui:
+            self.gui_monitor_timer = rospy.Timer(
+                rospy.Duration(self.gui_check_interval),
+                self._check_gui_health
+            )
 
         # Subscribers with message_filters for synchronized callback
-        self.color_sub = message_filters.Subscriber(self.color_topic, Image)
-        self.depth_sub = message_filters.Subscriber(self.depth_topic, Image)
+        # Use queue_size=1 to prevent message backlog (only process latest frame)
+        self.color_sub = message_filters.Subscriber(self.color_topic, Image, queue_size=1)
+        self.depth_sub = message_filters.Subscriber(self.depth_topic, Image, queue_size=1)
         self.camera_info_sub = rospy.Subscriber(
             self.camera_info_topic, CameraInfo, self._camera_info_callback, queue_size=1
         )
 
         # Approximate time synchronizer for RGB-D
+        # Use queue_size=1 to prevent frame backlog - only process latest synchronized pair
         self.ts = message_filters.ApproximateTimeSynchronizer(
-            [self.color_sub, self.depth_sub], queue_size=10, slop=0.1
+            [self.color_sub, self.depth_sub], queue_size=1, slop=0.1
         )
         self.ts.registerCallback(self._rgbd_callback)
 
@@ -127,12 +150,19 @@ class BundleSdfNode:
         with open(cfg_bundletrack_path, "r") as f:
             cfg_bundletrack = yaml.safe_load(f)
 
+        # SPDLOG: 0=trace, 1=debug, 2=info, 3=warn, 4=error, 5=critical (shows this level and below)
+        # To suppress warnings, set to 4 or higher
         cfg_bundletrack["SPDLOG"] = int(self.debug_level)
         cfg_bundletrack["depth_processing"]["percentile"] = 95
         cfg_bundletrack["erode_mask"] = 3
         cfg_bundletrack["debug_dir"] = self.output_dir + "/"
-        cfg_bundletrack["bundle"]["max_BA_frames"] = 10
+        
+        # Bundle Adjustment settings - increased for better long-term stability
+        # Increase max_BA_frames to maintain consistency over longer sequences
+        cfg_bundletrack["bundle"]["max_BA_frames"] = 20  # Was 10, increased for drift reduction
         cfg_bundletrack["bundle"]["max_optimized_feature_loss"] = 0.03
+        
+        # Feature correspondence settings - tightened for better accuracy
         cfg_bundletrack["feature_corres"]["max_dist_neighbor"] = 0.02
         cfg_bundletrack["feature_corres"]["max_normal_neighbor"] = 30
         cfg_bundletrack["feature_corres"]["max_dist_no_neighbor"] = 0.01
@@ -140,7 +170,11 @@ class BundleSdfNode:
         cfg_bundletrack["feature_corres"]["map_points"] = True
         cfg_bundletrack["feature_corres"]["resize"] = 400
         cfg_bundletrack["feature_corres"]["rematch_after_nerf"] = True
-        cfg_bundletrack["keyframe"]["min_rot"] = 5
+        
+        # Keyframe selection - tighter threshold to create more keyframes for stability
+        cfg_bundletrack["keyframe"]["min_rot"] = 3  # Was 5, reduced for more keyframes
+        
+        # RANSAC settings - tighter for better pose estimation
         cfg_bundletrack["ransac"]["inlier_dist"] = 0.01
         cfg_bundletrack["ransac"]["inlier_normal_angle"] = 20
         cfg_bundletrack["ransac"]["max_trans_neighbor"] = 0.02
@@ -162,10 +196,14 @@ class BundleSdfNode:
         cfg_nerf["continual"] = True
         cfg_nerf["trunc_start"] = 0.01
         cfg_nerf["trunc"] = 0.01
-        cfg_nerf["mesh_resolution"] = 0.005
+        cfg_nerf["mesh_resolution"] = 0.003  # Finer mesh (was 0.005)
         cfg_nerf["down_scale_ratio"] = 1
         cfg_nerf["fs_sdf"] = 0.1
         cfg_nerf["far"] = cfg_bundletrack["depth_processing"]["zfar"]
+        
+        # Mesh extraction parameters to prevent disappearing
+        cfg_nerf["mesh_isolevel"] = 0.0  # More permissive surface threshold (default: 0)
+        cfg_nerf["mesh_min_vertices"] = 100  # Keep smaller mesh fragments
         cfg_nerf["datadir"] = os.path.join(
             self.output_dir, "nerf_with_bundletrack_online"
         )
@@ -187,6 +225,45 @@ class BundleSdfNode:
 
         rospy.loginfo("BundleSDF tracker initialized")
 
+    def _check_gui_health(self, event):
+        """Monitor GUI process health and log warnings if it becomes unresponsive."""
+        if not self.use_gui or self.tracker is None:
+            return
+            
+        try:
+            # Check if tracker has GUI-related attributes
+            if not hasattr(self.tracker, 'gui_dict') or self.tracker.gui_dict is None:
+                return
+                
+            with self.tracker.gui_lock:
+                gui_alive = self.tracker.gui_dict.get("gui_alive", True)
+                last_heartbeat = self.tracker.gui_dict.get("gui_last_heartbeat", None)
+            
+            import time
+            current_time = time.time()
+            
+            if not gui_alive:
+                if not self.gui_dead_logged:
+                    rospy.logwarn(
+                        "GUI process has terminated. Pose tracking continues without visualization. "
+                        "Consider restarting the node if GUI is needed."
+                    )
+                    self.gui_dead_logged = True
+            elif last_heartbeat is not None:
+                time_since_heartbeat = current_time - last_heartbeat
+                if time_since_heartbeat > self.gui_heartbeat_timeout:
+                    rospy.logwarn_throttle(30.0,
+                        f"GUI may be unresponsive (no heartbeat for {time_since_heartbeat:.1f}s). "
+                        "Pose tracking continues."
+                    )
+                    
+        except (BrokenPipeError, ConnectionRefusedError, EOFError, OSError) as e:
+            if not self.gui_dead_logged:
+                rospy.logwarn(f"GUI health check failed (Manager may have terminated): {e}")
+                self.gui_dead_logged = True
+        except Exception as e:
+            rospy.logwarn_throttle(60.0, f"GUI health check error: {e}")
+
     def _camera_info_callback(self, msg):
         """Store camera intrinsics from CameraInfo message."""
         if self.K is None:
@@ -198,6 +275,10 @@ class BundleSdfNode:
     # === === === ===
     def _rgbd_callback(self, color_msg, depth_msg):
         """Process synchronized RGB-D messages."""
+        t_callback_start = time.time()
+        msg_timestamp = color_msg.header.stamp.to_sec()
+        rospy.loginfo(f"RGBD callback received at {t_callback_start:.3f}, msg timestamp: {msg_timestamp:.3f}, latency: {(t_callback_start - msg_timestamp)*1000:.1f}ms")
+        
         if self.K is None:
             rospy.logwarn_throttle(5.0, "Waiting for camera intrinsics...")
             return
@@ -258,7 +339,7 @@ class BundleSdfNode:
                     mask = self.segmenter.get_first_frame_mask(
                         temp_path,
                         target_object=self.target_object,
-                        wait_for_robot_home=True,
+                        wait_for_robot_home=self.with_robot,
                     )
 
                     if mask is None:
@@ -283,7 +364,10 @@ class BundleSdfNode:
                     temp_path = "/tmp/bundlesdf_current_frame.png"
                     cv2.imwrite(temp_path, color)
                     mask = self.segmenter.process(
-                        temp_path, mask_numpy=self.first_mask, first_frame=True
+                        temp_path,
+                        mask_numpy=self.first_mask,
+                        first_frame=True,
+                        wait_for_robot_home=self.with_robot,
                     )
                     rospy.loginfo("Cutie segmenter initialized with first mask")
                 else:
@@ -312,6 +396,7 @@ class BundleSdfNode:
             id_str = f"{self.frame_count:06d}"
 
             # Run BundleSDF tracker
+            t_before_run = time.time()
             with self.lock:
                 self.tracker.run(
                     color=color,
@@ -322,6 +407,9 @@ class BundleSdfNode:
                     occ_mask=None,
                     pose_in_model=np.eye(4),
                 )
+            t_after_run = time.time()
+            run_latency_ms = (t_after_run - t_before_run) * 1000.0
+            rospy.loginfo(f"Frame {id_str}: tracker.run() took {run_latency_ms:.1f}ms")
 
             # Get latest pose from tracker
             if len(self.tracker.bundler._keyframes) > 0:

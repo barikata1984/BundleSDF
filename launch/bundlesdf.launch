@@ -13,7 +13,11 @@
     <arg name="use_gui" default="false"/>
     <arg name="shorter_side" default="480"/>
     <arg name="frame_stride" default="1"/>
-    <arg name="debug_level" default="2"/>
+    <arg name="debug_level" default="1"/>  <!-- 0=trace, 1=debug, 2=info, 3=warn, 4=error (値以下を表示) -->
+    
+    <!-- GUI health monitoring parameters (for long-running sessions) -->
+    <arg name="gui_heartbeat_timeout" default="10.0"/>
+    <arg name="gui_check_interval" default="5.0"/>
 
     <!-- Frame IDs -->
     <arg name="camera_frame_id" default="camera_color_optical_frame"/>
@@ -22,6 +26,9 @@
     <!-- Target object for segmentation (optional) -->
     <!-- If provided, skips interactive prompt and uses this text for SAM3 segmentation -->
     <arg name="target_object" default=""/>
+    
+    <!-- Robot integration (wait for robot to be at home before segmentation) -->
+    <arg name="with_robot" default="true"/>
 
     <!-- BundleSDF Node -->
     <node name="bundlesdf_node" pkg="bundlesdf" type="bundlesdf_node.py" output="screen">
@@ -37,6 +44,11 @@
         <param name="shorter_side" value="$(arg shorter_side)"/>
         <param name="frame_stride" value="$(arg frame_stride)"/>
         <param name="debug_level" value="$(arg debug_level)"/>
+        <param name="with_robot" value="$(arg with_robot)"/>
+        
+        <!-- GUI health monitoring -->
+        <param name="gui_heartbeat_timeout" value="$(arg gui_heartbeat_timeout)"/>
+        <param name="gui_check_interval" value="$(arg gui_check_interval)"/>
 
         <!-- Frame IDs -->
         <param name="camera_frame_id" value="$(arg camera_frame_id)"/>

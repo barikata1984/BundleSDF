@@ -17,6 +17,18 @@ from PIL import Image
 import cv2,imageio
 import time
 import trimesh
+import collections
+import collections.abc
+if not hasattr(collections, 'Mapping'):
+    collections.Mapping = collections.abc.Mapping
+if not hasattr(collections, 'Set'):
+    collections.Set = collections.abc.Set
+if not hasattr(collections, 'Iterable'):
+    collections.Iterable = collections.abc.Iterable
+import fractions
+import math
+if not hasattr(fractions, 'gcd'):
+    fractions.gcd = math.gcd
 import pyrender
 from Utils import *
 from transformations import *

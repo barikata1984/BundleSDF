@@ -14,6 +14,14 @@ import torch
 from torchvision.transforms.functional import to_tensor
 from PIL import Image
 
+import sys
+# Add Cutie to python path
+cutie_pkg_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "third_party", "Cutie"
+)
+if cutie_pkg_path not in sys.path:
+    sys.path.append(cutie_pkg_path)
+
 from cutie.inference.inference_core import InferenceCore
 from cutie.utils.get_default_model import get_default_model
 
@@ -243,14 +251,22 @@ class Segmenter:
 
     @torch.inference_mode()
     @torch.amp.autocast("cuda")
-    def process(self, image_path, mask_numpy=None, first_frame=False):
+    def process(
+        self,
+        image_path,
+        mask_numpy=None,
+        first_frame=False,
+        wait_for_robot_home=False,
+    ):
         # load the image as RGB; normalization is done within the model
         image = Image.open(image_path)
         image = to_tensor(image).cuda().float()
 
         if first_frame and mask_numpy is None:
             # Use SAM3 to get the mask if it's the first frame and no mask is provided
-            mask_numpy = self.get_first_frame_mask(image_path)
+            mask_numpy = self.get_first_frame_mask(
+                image_path, wait_for_robot_home=wait_for_robot_home
+            )
 
             # Check for early exit signal (mask preview)
             # if mask_numpy is None:

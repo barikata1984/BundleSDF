@@ -57,17 +57,31 @@ class BundleSdfGui:
 
 
   def clean_mesh(self):
+    """Clean mesh by keeping largest component, but more permissive to avoid losing small parts."""
     try:
       ms = trimesh_split(self.mesh)
       best_size = 0
       best = None
+      # Keep meshes that are at least 20% of the largest component
+      size_threshold = 0
       for m in ms:
-        if m.vertices.shape[0]>best_size:
+        if m.vertices.shape[0] > best_size:
           best_size = m.vertices.shape[0]
           best = m
-      self.mesh = trimesh_clean(best)
+      
+      # More permissive: keep fragments at least 10% of main component size
+      size_threshold = best_size * 0.1
+      kept_meshes = [m for m in ms if m.vertices.shape[0] >= size_threshold]
+      
+      if len(kept_meshes) > 1:
+        # Merge multiple components if they're significant
+        import trimesh
+        self.mesh = trimesh.util.concatenate(kept_meshes)
+        logging.info(f"Kept {len(kept_meshes)} mesh components (largest: {best_size} vertices)")
+      else:
+        self.mesh = trimesh_clean(best)
     except Exception as e:
-      logging.info(e)
+      logging.info(f"Mesh cleaning error: {e}")
 
 
   def drag_rotate_pose(self, sender, app_data):

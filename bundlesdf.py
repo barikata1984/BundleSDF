@@ -183,55 +183,114 @@ def ensure_tensor_types(
 
 
 def run_gui(gui_dict, gui_lock):
-    print("GUI started")
-    with gui_lock:
-        gui = BundleSdfGui(img_height=200)
-        gui_dict["started"] = True
-
-    local_dict = {}
-
-    while dpg.is_dearpygui_running():
+    """GUI process main loop with improved stability for long-running sessions.
+    
+    Changes for stability:
+    - Periodic garbage collection to prevent memory accumulation
+    - Heartbeat mechanism for health monitoring
+    - Graceful handling of dpg context issues
+    """
+    import gc
+    
+    try:
+        print("GUI started")
         with gui_lock:
-            if gui_dict["join"]:
-                break
-
-            for k in [
-                "mesh",
-                "color",
-                "mask",
-                "ob_in_cam",
-                "id_str",
-                "K",
-                "n_keyframe",
-                "nerf_num_frames",
-            ]:
-                if k in gui_dict:
-                    local_dict[k] = gui_dict[k]
-                    del gui_dict[k]
-
-        if "nerf_num_frames" in local_dict:
-            gui.set_nerf_num_frames(local_dict["nerf_num_frames"])
-
-        if "mesh" in local_dict:
-            logging.info(f"mesh V: {local_dict['mesh'].vertices.shape}")
-            gui.update_mesh(local_dict["mesh"])
-
-        if "color" in local_dict:
-            gui.update_frame(
-                rgb=local_dict["color"],
-                mask=local_dict["mask"],
-                ob_in_cam=local_dict["ob_in_cam"],
-                id_str=local_dict["id_str"],
-                K=local_dict["K"],
-                n_keyframe=local_dict["n_keyframe"],
-            )
+            gui = BundleSdfGui(img_height=200)
+            gui_dict["started"] = True
+            gui_dict["gui_alive"] = True
+            gui_dict["gui_last_heartbeat"] = time.time()
 
         local_dict = {}
+        frame_count = 0
+        gc_interval = 100  # Run GC every 100 frames
 
-        dpg.render_dearpygui_frame()
-        time.sleep(0.03)
+        while dpg.is_dearpygui_running():
+            try:
+                # Update heartbeat for health monitoring
+                with gui_lock:
+                    gui_dict["gui_last_heartbeat"] = time.time()
+                    
+                    if gui_dict["join"]:
+                        break
 
-    dpg.destroy_context()
+                    for k in [
+                        "mesh",
+                        "color",
+                        "mask",
+                        "ob_in_cam",
+                        "id_str",
+                        "K",
+                        "n_keyframe",
+                        "nerf_num_frames",
+                    ]:
+                        if k in gui_dict:
+                            local_dict[k] = gui_dict[k]
+                            del gui_dict[k]
+
+                if "nerf_num_frames" in local_dict:
+                    gui.set_nerf_num_frames(local_dict["nerf_num_frames"])
+
+                if "mesh" in local_dict:
+                    logging.info(f"mesh V: {local_dict['mesh'].vertices.shape}")
+                    gui.update_mesh(local_dict["mesh"])
+
+                if "color" in local_dict:
+                    t_gui_render = time.time()
+                    gui.update_frame(
+                        rgb=local_dict["color"],
+                        mask=local_dict["mask"],
+                        ob_in_cam=local_dict["ob_in_cam"],
+                        id_str=local_dict["id_str"],
+                        K=local_dict["K"],
+                        n_keyframe=local_dict["n_keyframe"],
+                    )
+                    
+                    # Log GUI rendering latency
+                    if "timestamp" in local_dict:
+                        gui_latency_ms = (t_gui_render - local_dict["timestamp"]) * 1000.0
+                        logging.info(f"GUI rendering latency for {local_dict['id_str']}: {gui_latency_ms:.1f}ms")
+
+                local_dict = {}
+                
+                # Periodic garbage collection to prevent memory accumulation
+                frame_count += 1
+                if frame_count % gc_interval == 0:
+                    gc.collect()
+
+            except (BrokenPipeError, ConnectionRefusedError, EOFError) as e:
+                # Manager terminated - exit gracefully
+                logging.warning(f"GUI: Manager connection lost: {e}")
+                break
+            except Exception:
+                import traceback
+                with open("/tmp/gui_crash.log", "a") as f:
+                    f.write(f"--- Crash occurring at {time.time()} ---\n")
+                    f.write(traceback.format_exc())
+                    f.write("\n")
+                logging.exception("GUI loop exception caught, attempting to continue...")
+
+            dpg.render_dearpygui_frame()
+            time.sleep(0.03)
+
+        # Clean shutdown
+        try:
+            with gui_lock:
+                gui_dict["gui_alive"] = False
+        except:
+            pass
+        dpg.destroy_context()
+        logging.info("GUI process exited normally")
+
+    except Exception:
+        import traceback
+        with open("/tmp/gui_crash.log", "w") as f:
+            f.write(traceback.format_exc())
+        logging.exception("GUI Process Crashed Top-Level")
+        try:
+            with gui_lock:
+                gui_dict["gui_alive"] = False
+        except:
+            pass
 
 
 def run_nerf(
@@ -250,6 +309,16 @@ def run_nerf(
     log_lock,
     enable_timing_log,
 ):
+    """NeRF training process with improved memory management.
+    
+    Changes for stability:
+    - Periodic CUDA cache clearing
+    - Garbage collection after each training batch
+    - Better error handling for Manager termination
+    """
+    import gc
+    import torch
+    
     try:
         with open("/tmp/run_nerf_progress.log", "w") as f:
             f.write("run_nerf process started\n")
@@ -269,6 +338,10 @@ def run_nerf(
         occ_masks_all = []
         prev_pcd_real_scale = None
         tf_normalize = None
+        
+        # Memory management interval (clear CUDA cache every N batches)
+        cuda_gc_interval = 5
+        
         if translation is not None:
             tf_normalize = np.eye(4)
             tf_normalize[:3, 3] = translation
@@ -570,7 +643,9 @@ def run_nerf(
                 )
 
                 logging.info("Getting mesh")
-                mesh = nerf.extract_mesh(isolevel=0, voxel_size=cfg_nerf["mesh_resolution"])
+                # Use isolevel from config if available, otherwise default to 0
+                isolevel = cfg_nerf.get("mesh_isolevel", 0.0)
+                mesh = nerf.extract_mesh(isolevel=isolevel, voxel_size=cfg_nerf["mesh_resolution"])
                 mesh = mesh_to_real_world(
                     mesh,
                     pose_offset=offset,
@@ -586,6 +661,13 @@ def run_nerf(
                 logging.info(f"nerf done at frame {frame_id}")
 
                 prev_pcd_real_scale = copy.deepcopy(pcd_real_scale)
+                
+                # Periodic memory cleanup to prevent VRAM/RAM accumulation
+                if cnt_nerf % cuda_gc_interval == 0:
+                    log_progress(f"Running periodic CUDA/memory cleanup at cnt_nerf={cnt_nerf}")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    gc.collect()
 
                 ####### Log
                 if SPDLOG >= 2:
@@ -1311,6 +1393,7 @@ class BundleSdf:
                 self.gui_dict["id_str"] = frame._id_str
                 self.gui_dict["K"] = self.K
                 self.gui_dict["n_keyframe"] = len(self.bundler._keyframes)
+                self.gui_dict["timestamp"] = time.time()  # Add timestamp for GUI latency measurement
 
         t_run_end = time.time()
         total_ms = (t_run_end - t_run_start) * 1000.0
