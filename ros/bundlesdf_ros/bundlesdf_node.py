@@ -18,13 +18,14 @@ import csv
 from datetime import datetime
 
 import rospy
-from sensor_msgs.msg import Image, CameraInfo
-from std_msgs.msg import Bool
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
+from std_msgs.msg import Bool, Header
 from geometry_msgs.msg import PoseStamped
 from cv_bridge import CvBridge
 import message_filters
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
+import struct
 
 # Add BundleSDF to Python path
 BUNDLESDF_DIR = os.path.dirname(
@@ -289,11 +290,25 @@ class BundleSdfNode:
         else:
             self.feature_logger = None
 
+        # Surface point publishing configuration
+        self.surface_point_sample_count = rospy.get_param(
+            "~surface_point_sample_count", 128
+        )
+        rospy.loginfo(
+            f"Surface point sampling: {self.surface_point_sample_count} points per frame"
+        )
+
         # TF broadcaster
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
 
         # Publisher
         self.pose_pub = rospy.Publisher("~object_pose", PoseStamped, queue_size=10)
+        self.surface_points_pub = rospy.Publisher(
+            "~surface_points", PointCloud2, queue_size=10
+        )
+        self.surface_points_normalized_pub = rospy.Publisher(
+            "~surface_points_normalized", PointCloud2, queue_size=10
+        )
         self.object_targeted_pub = rospy.Publisher(
             "/object_targeted", Bool, queue_size=1, latch=True
         )
@@ -640,6 +655,15 @@ class BundleSdfNode:
                 # Publish pose
                 self._publish_pose(pose_matrix, color_msg.header.stamp)
 
+                # Publish surface points
+                try:
+                    surface_points = self._get_masked_surface_points(latest_frame)
+                    self._publish_surface_points(surface_points, color_msg.header.stamp)
+                except Exception as e_surface:
+                    rospy.logwarn_throttle(
+                        10.0, f"Surface points publishing failed: {e_surface}"
+                    )
+
                 # Feature point logging (for stability investigation)
                 if self.enable_feature_logging and (
                     self.frame_count % self.feature_log_stride == 0
@@ -720,6 +744,114 @@ class BundleSdfNode:
         t_msg.transform.rotation.w = quat[3]
 
         self.tf_broadcaster.sendTransform(t_msg)
+
+    def _normalize_point_cloud(self, points):
+        """
+        Normalize point cloud: center at origin and scale to unit sphere.
+
+        Args:
+            points: numpy array of shape (N, 3) containing XYZ coordinates
+
+        Returns:
+            normalized_points: numpy array of shape (N, 3), normalized to [-1, 1] range
+        """
+        if points is None or len(points) == 0:
+            return None
+
+        # Center at centroid
+        centroid = points.mean(axis=0)
+        centered = points - centroid
+
+        # Scale by max distance from centroid
+        distances = np.linalg.norm(centered, axis=1)
+        max_dist = distances.max()
+
+        if max_dist < 1e-6:  # Avoid division by zero
+            return centered
+
+        normalized = centered / max_dist
+        return normalized
+
+    def _create_pointcloud2_msg(self, points, stamp, frame_id):
+        """
+        Create PointCloud2 message from numpy array.
+
+        Args:
+            points: numpy array of shape (N, 3) containing XYZ coordinates
+            stamp: ROS timestamp
+            frame_id: coordinate frame ID
+
+        Returns:
+            PointCloud2 message
+        """
+        # Create header
+        header = Header()
+        header.stamp = stamp
+        header.frame_id = frame_id
+
+        # Define fields (x, y, z as float32)
+        fields = [
+            PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+        ]
+
+        # Pack point data into binary format
+        cloud_data = []
+        for point in points:
+            cloud_data.append(
+                struct.pack("fff", float(point[0]), float(point[1]), float(point[2]))
+            )
+        cloud_bytes = b"".join(cloud_data)
+
+        # Create PointCloud2 message
+        pc2_msg = PointCloud2()
+        pc2_msg.header = header
+        pc2_msg.height = 1
+        pc2_msg.width = len(points)
+        pc2_msg.fields = fields
+        pc2_msg.is_bigendian = False
+        pc2_msg.point_step = 12  # 3 * float32 (4 bytes each)
+        pc2_msg.row_step = pc2_msg.point_step * pc2_msg.width
+        pc2_msg.data = cloud_bytes
+        pc2_msg.is_dense = True
+
+        return pc2_msg
+
+    def _publish_surface_points(self, surface_points, stamp):
+        """
+        Publish both raw and normalized surface points as PointCloud2.
+
+        Args:
+            surface_points: numpy array of shape (N, 3) containing XYZ coordinates
+            stamp: ROS timestamp
+        """
+        if surface_points is None or len(surface_points) == 0:
+            return
+
+        # Random sampling if we have more points than requested
+        num_points = len(surface_points)
+        if num_points > self.surface_point_sample_count:
+            indices = np.random.choice(
+                num_points, self.surface_point_sample_count, replace=False
+            )
+            sampled_points = surface_points[indices]
+        else:
+            sampled_points = surface_points
+
+        # Publish raw point cloud
+        raw_msg = self._create_pointcloud2_msg(
+            sampled_points, stamp, self.camera_frame_id
+        )
+        self.surface_points_pub.publish(raw_msg)
+
+        # Normalize and publish normalized point cloud
+        normalized_points = self._normalize_point_cloud(sampled_points)
+        if normalized_points is not None:
+            normalized_msg = self._create_pointcloud2_msg(
+                normalized_points, stamp, self.camera_frame_id
+            )
+            self.surface_points_normalized_pub.publish(normalized_msg)
 
     def _get_masked_surface_points(self, frame):
         """Extract 3D points within the foreground mask from frame's point cloud."""

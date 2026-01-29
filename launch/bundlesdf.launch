@@ -34,6 +34,9 @@
     <arg name="enable_feature_logging" default="false"/>
     <arg name="feature_log_stride" default="1"/>
 
+    <!-- Surface point publishing -->
+    <arg name="surface_point_sample_count" default="128"/>
+
     <!-- BundleSDF Node -->
     <node name="bundlesdf_node" pkg="bundlesdf" type="bundlesdf_node.py" output="screen">
         <!-- Topic remappings -->
@@ -64,6 +67,9 @@
         <!-- Feature point logging -->
         <param name="enable_feature_logging" value="$(arg enable_feature_logging)"/>
         <param name="feature_log_stride" value="$(arg feature_log_stride)"/>
+
+        <!-- Surface point publishing -->
+        <param name="surface_point_sample_count" value="$(arg surface_point_sample_count)"/>
     </node>
 
 </launch>
