@@ -968,11 +968,38 @@ class BundleSdf:
                 self.p_dict["running"] == False
                 and "optimized_cvcam_in_obs" in self.p_dict
             ):
+                # Thresholds for rejecting abnormal NeRF pose updates (likely due to NeRF collapse)
+                max_trans_update_threshold = 0.1  # 10cm
+                max_rot_update_threshold = 30 / 180.0 * np.pi  # 30 degrees
+                n_rejected = 0
+                
                 for i_f in range(len(self.p_dict["optimized_cvcam_in_obs"])):
+                    # Compute update magnitude for anomaly detection
+                    trans_update = np.linalg.norm(
+                        self.p_dict["optimized_cvcam_in_obs"][i_f][:3, 3]
+                        - self.bundler._keyframes[i_f]._pose_in_model[:3, 3]
+                    )
+                    rot_update = geodesic_distance(
+                        self.p_dict["optimized_cvcam_in_obs"][i_f][:3, :3],
+                        self.bundler._keyframes[i_f]._pose_in_model[:3, :3],
+                    )
+                    
+                    # Check for abnormally large updates (likely NeRF collapse)
+                    if trans_update > max_trans_update_threshold or rot_update > max_rot_update_threshold:
+                        logging.warning(
+                            f"[NeRF Anomaly] on_finish: Rejecting abnormal pose update for frame {self.bundler._keyframes[i_f]._id_str}: "
+                            f"trans_update={trans_update:.4f}m, rot_update={rot_update * 180 / np.pi:.2f}deg"
+                        )
+                        n_rejected += 1
+                        continue  # Skip this frame's pose update
+                    
                     self.bundler._keyframes[i_f]._pose_in_model = self.p_dict[
                         "optimized_cvcam_in_obs"
                     ][i_f]
                     self.bundler._keyframes[i_f]._nerfed = True
+                
+                if n_rejected > 0:
+                    logging.warning(f"[NeRF Anomaly] on_finish: Rejected {n_rejected}/{len(self.p_dict['optimized_cvcam_in_obs'])} pose updates")
                 del self.p_dict["optimized_cvcam_in_obs"]
 
                 # ここで ob_in_cam をチェックし、空なら bundler._keyframes から作成（存在するファイルはスキップ）
@@ -1333,18 +1360,36 @@ class BundleSdf:
         rematch_after_nerf = self.cfg_track["feature_corres"]["rematch_after_nerf"]
         logging.info(f"rematch_after_nerf: {rematch_after_nerf}")
         frames_large_update = []
+        
+        # Thresholds for rejecting abnormal NeRF pose updates (likely due to NeRF collapse)
+        max_trans_update_threshold = 0.1  # 10cm - reject if translation change exceeds this
+        max_rot_update_threshold = 30 / 180.0 * np.pi  # 30 degrees - reject if rotation change exceeds this
+        
         with self.lock:
             if "optimized_cvcam_in_obs" in self.p_dict:
+                n_rejected = 0
                 for i_f in range(len(self.p_dict["optimized_cvcam_in_obs"])):
+                    # Always compute update magnitude for logging and anomaly detection
+                    trans_update = np.linalg.norm(
+                        self.p_dict["optimized_cvcam_in_obs"][i_f][:3, 3]
+                        - self.bundler._keyframes[i_f]._pose_in_model[:3, 3]
+                    )
+                    rot_update = geodesic_distance(
+                        self.p_dict["optimized_cvcam_in_obs"][i_f][:3, :3],
+                        self.bundler._keyframes[i_f]._pose_in_model[:3, :3],
+                    )
+                    
+                    # Check for abnormally large updates (likely NeRF collapse)
+                    if trans_update > max_trans_update_threshold or rot_update > max_rot_update_threshold:
+                        logging.warning(
+                            f"[NeRF Anomaly] Rejecting abnormal pose update for frame {self.bundler._keyframes[i_f]._id_str}: "
+                            f"trans_update={trans_update:.4f}m (threshold={max_trans_update_threshold}m), "
+                            f"rot_update={rot_update * 180 / np.pi:.2f}deg (threshold={max_rot_update_threshold * 180 / np.pi:.0f}deg)"
+                        )
+                        n_rejected += 1
+                        continue  # Skip this frame's pose update
+                    
                     if rematch_after_nerf:
-                        trans_update = np.linalg.norm(
-                            self.p_dict["optimized_cvcam_in_obs"][i_f][:3, 3]
-                            - self.bundler._keyframes[i_f]._pose_in_model[:3, 3]
-                        )
-                        rot_update = geodesic_distance(
-                            self.p_dict["optimized_cvcam_in_obs"][i_f][:3, :3],
-                            self.bundler._keyframes[i_f]._pose_in_model[:3, :3],
-                        )
                         if trans_update >= 0.005 or rot_update >= 5 / 180.0 * np.pi:
                             frames_large_update.append(self.bundler._keyframes[i_f])
                         logging.info(
@@ -1354,6 +1399,9 @@ class BundleSdf:
                         "optimized_cvcam_in_obs"
                     ][i_f]
                     self.bundler._keyframes[i_f]._nerfed = True
+                
+                if n_rejected > 0:
+                    logging.warning(f"[NeRF Anomaly] Rejected {n_rejected}/{len(self.p_dict['optimized_cvcam_in_obs'])} pose updates due to abnormal magnitude")
                 logging.info(
                     f"synced pose from nerf, latest nerf frame {self.bundler._keyframes[len(self.p_dict['optimized_cvcam_in_obs']) - 1]._id_str}"
                 )

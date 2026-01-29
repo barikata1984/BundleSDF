@@ -30,6 +30,10 @@
     <!-- Robot integration (wait for robot to be at home before segmentation) -->
     <arg name="with_robot" default="true"/>
 
+    <!-- Feature point logging for stability investigation -->
+    <arg name="enable_feature_logging" default="false"/>
+    <arg name="feature_log_stride" default="1"/>
+
     <!-- BundleSDF Node -->
     <node name="bundlesdf_node" pkg="bundlesdf" type="bundlesdf_node.py" output="screen">
         <!-- Topic remappings -->
@@ -56,6 +60,10 @@
 
         <!-- Target object for segmentation -->
         <param name="target_object" value="$(arg target_object)" if="$(eval target_object != '')"/>
+
+        <!-- Feature point logging -->
+        <param name="enable_feature_logging" value="$(arg enable_feature_logging)"/>
+        <param name="feature_log_stride" value="$(arg feature_log_stride)"/>
     </node>
 
 </launch>

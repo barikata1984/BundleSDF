@@ -14,6 +14,8 @@ import time
 import numpy as np
 import cv2
 import yaml
+import csv
+from datetime import datetime
 
 import rospy
 from sensor_msgs.msg import Image, CameraInfo
@@ -32,6 +34,178 @@ sys.path.insert(0, BUNDLESDF_DIR)
 
 from bundlesdf import BundleSdf, set_seed
 from segmentation_utils import Segmenter
+
+
+class FeaturePointLogger:
+    """Logs feature point data for stability investigation."""
+
+    def __init__(self, output_dir, log_every_n_frames=1):
+        self.log_dir = os.path.join(output_dir, "feature_point_logs")
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.log_every_n = log_every_n_frames
+        self.csv_path = os.path.join(self.log_dir, "shape_summary.csv")
+        self.log_path = os.path.join(self.log_dir, "shape_summary.log")
+        self._init_csv()
+
+    def _init_csv(self):
+        """Initialize CSV file with header."""
+        with open(self.csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    "timestamp",
+                    "frame_id",
+                    "type",
+                    "num_points",
+                    "x_min",
+                    "x_max",
+                    "y_min",
+                    "y_max",
+                    "z_min",
+                    "z_max",
+                    "x_mean",
+                    "y_mean",
+                    "z_mean",
+                    "x_std",
+                    "y_std",
+                    "z_std",
+                    "skip_reason",
+                ]
+            )
+
+    def compute_shape_stats(self, points_3d):
+        """Compute shape statistics for a point cloud."""
+        if points_3d is None or len(points_3d) == 0:
+            return None
+        stats = {
+            "num_points": len(points_3d),
+            "xyz_min": points_3d.min(axis=0),
+            "xyz_max": points_3d.max(axis=0),
+            "xyz_mean": points_3d.mean(axis=0),
+            "xyz_std": points_3d.std(axis=0),
+        }
+        return stats
+
+    def log_feature_points(
+        self, frame_id, timestamp, ransac_points, surface_points, ransac_skip_reason=""
+    ):
+        """Log both feature point types."""
+        # Save raw data as .npy
+        if ransac_points is not None and len(ransac_points) > 0:
+            np.save(
+                os.path.join(self.log_dir, f"ransac_{frame_id}.npy"), ransac_points
+            )
+        if surface_points is not None and len(surface_points) > 0:
+            np.save(
+                os.path.join(self.log_dir, f"surface_{frame_id}.npy"), surface_points
+            )
+
+        # Compute and log statistics
+        ransac_stats = self.compute_shape_stats(ransac_points)
+        surface_stats = self.compute_shape_stats(surface_points)
+
+        self._write_stats_to_csv(
+            frame_id, timestamp, "ransac", ransac_stats, ransac_skip_reason
+        )
+        self._write_stats_to_csv(frame_id, timestamp, "surface", surface_stats, "")
+        self._write_stats_to_log(
+            frame_id, timestamp, ransac_stats, surface_stats, ransac_skip_reason
+        )
+
+    def _write_stats_to_csv(self, frame_id, timestamp, point_type, stats, skip_reason):
+        """Write statistics to CSV file."""
+        with open(self.csv_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            if stats is None:
+                # Write zeros and NaN for skipped/failed extraction
+                writer.writerow(
+                    [
+                        timestamp,
+                        frame_id,
+                        point_type,
+                        0,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        np.nan,
+                        skip_reason,
+                    ]
+                )
+            else:
+                writer.writerow(
+                    [
+                        timestamp,
+                        frame_id,
+                        point_type,
+                        stats["num_points"],
+                        stats["xyz_min"][0],
+                        stats["xyz_max"][0],
+                        stats["xyz_min"][1],
+                        stats["xyz_max"][1],
+                        stats["xyz_min"][2],
+                        stats["xyz_max"][2],
+                        stats["xyz_mean"][0],
+                        stats["xyz_mean"][1],
+                        stats["xyz_mean"][2],
+                        stats["xyz_std"][0],
+                        stats["xyz_std"][1],
+                        stats["xyz_std"][2],
+                        skip_reason,
+                    ]
+                )
+            f.flush()  # Flush buffer to ensure immediate write
+
+    def _write_stats_to_log(
+        self, frame_id, timestamp, ransac_stats, surface_stats, ransac_skip_reason
+    ):
+        """Write statistics to human-readable log file."""
+        with open(self.log_path, "a") as f:
+            f.write(f"\n=== Frame {frame_id} @ {timestamp:.6f} ===\n")
+
+            # RANSAC inliers
+            if ransac_stats:
+                f.write(f"RANSAC Inliers: {ransac_stats['num_points']} points\n")
+                f.write(
+                    f"  Bounds: X[{ransac_stats['xyz_min'][0]:.4f}, {ransac_stats['xyz_max'][0]:.4f}]\n"
+                )
+                f.write(
+                    f"          Y[{ransac_stats['xyz_min'][1]:.4f}, {ransac_stats['xyz_max'][1]:.4f}]\n"
+                )
+                f.write(
+                    f"          Z[{ransac_stats['xyz_min'][2]:.4f}, {ransac_stats['xyz_max'][2]:.4f}]\n"
+                )
+                f.write(
+                    f"  Centroid: ({ransac_stats['xyz_mean'][0]:.4f}, {ransac_stats['xyz_mean'][1]:.4f}, {ransac_stats['xyz_mean'][2]:.4f})\n"
+                )
+            else:
+                f.write(f"RANSAC Inliers: N/A (reason: {ransac_skip_reason})\n")
+
+            # Surface points
+            if surface_stats:
+                f.write(f"Surface Points: {surface_stats['num_points']} points\n")
+                f.write(
+                    f"  Bounds: X[{surface_stats['xyz_min'][0]:.4f}, {surface_stats['xyz_max'][0]:.4f}]\n"
+                )
+                f.write(
+                    f"          Y[{surface_stats['xyz_min'][1]:.4f}, {surface_stats['xyz_max'][1]:.4f}]\n"
+                )
+                f.write(
+                    f"          Z[{surface_stats['xyz_min'][2]:.4f}, {surface_stats['xyz_max'][2]:.4f}]\n"
+                )
+                f.write(
+                    f"  Centroid: ({surface_stats['xyz_mean'][0]:.4f}, {surface_stats['xyz_mean'][1]:.4f}, {surface_stats['xyz_mean'][2]:.4f})\n"
+                )
+            else:
+                f.write("Surface Points: N/A (reason: extraction_error)\n")
+            f.flush()  # Flush buffer to ensure immediate write
 
 
 class BundleSdfNode:
@@ -89,6 +263,7 @@ class BundleSdfNode:
         self.first_frame_processed = False
         self.lock = threading.Lock()
         self.gui_dead_logged = False  # Track if GUI death has been logged
+        self.shutdown_requested = False  # Flag for graceful shutdown
 
         # Initialize segmenter if enabled
         if self.use_segmenter:
@@ -97,6 +272,22 @@ class BundleSdfNode:
             rospy.loginfo("Segmenter initialized")
         else:
             self.segmenter = None
+
+        # Feature point logging for stability investigation
+        self.enable_feature_logging = rospy.get_param("~enable_feature_logging", False)
+        self.feature_log_stride = rospy.get_param("~feature_log_stride", 1)
+        if self.enable_feature_logging:
+            self.feature_logger = FeaturePointLogger(
+                self.output_dir, self.feature_log_stride
+            )
+            rospy.loginfo(
+                f"Feature point logging enabled. Output: {self.output_dir}/feature_point_logs/"
+            )
+            # Note: Enter key monitoring will start after first frame is processed
+            # to avoid conflicts with SAM3 mask approval input
+            self.enter_monitor_thread = None
+        else:
+            self.feature_logger = None
 
         # TF broadcaster
         self.tf_broadcaster = tf2_ros.TransformBroadcaster()
@@ -224,6 +415,28 @@ class BundleSdfNode:
         )
 
         rospy.loginfo("BundleSDF tracker initialized")
+
+    def _monitor_enter_key(self):
+        """Monitor for ENTER key press to trigger graceful shutdown."""
+        try:
+            input()  # Wait for ENTER key
+            rospy.loginfo("\nENTER key detected. Initiating graceful shutdown...")
+            self.shutdown_requested = True
+
+            # Write final summary to log
+            if self.feature_logger:
+                with open(self.feature_logger.log_path, "a") as f:
+                    f.write("\n" + "=" * 60 + "\n")
+                    f.write("=== SHUTDOWN: Feature point logging completed ===\n")
+                    f.write(f"Total frames processed: {self.frame_count}\n")
+                    f.write("=" * 60 + "\n")
+                    f.flush()
+                rospy.loginfo(f"Final logs written to: {self.feature_logger.log_dir}")
+
+            # Trigger ROS shutdown
+            rospy.signal_shutdown("User requested shutdown via ENTER key")
+        except Exception as e:
+            rospy.logwarn(f"Enter key monitor error: {e}")
 
     def _check_gui_health(self, event):
         """Monitor GUI process health and log warnings if it becomes unresponsive."""
@@ -360,6 +573,12 @@ class BundleSdfNode:
                     self.first_mask = mask
                     self.first_frame_processed = True
 
+                    # Start Enter key monitoring thread now that initialization is complete
+                    if self.enable_feature_logging and self.enter_monitor_thread is None:
+                        rospy.loginfo("Press ENTER to stop logging and shutdown gracefully")
+                        self.enter_monitor_thread = threading.Thread(target=self._monitor_enter_key, daemon=True)
+                        self.enter_monitor_thread.start()
+
                     # Initialize Cutie with the first mask
                     temp_path = "/tmp/bundlesdf_current_frame.png"
                     cv2.imwrite(temp_path, color)
@@ -421,6 +640,36 @@ class BundleSdfNode:
                 # Publish pose
                 self._publish_pose(pose_matrix, color_msg.header.stamp)
 
+                # Feature point logging (for stability investigation)
+                if self.enable_feature_logging and (
+                    self.frame_count % self.feature_log_stride == 0
+                ):
+                    try:
+                        # Get reference frame for RANSAC matches
+                        # Use the second-to-last keyframe as reference if available
+                        ref_frame = None
+                        if len(self.tracker.bundler._keyframes) >= 2:
+                            ref_frame = self.tracker.bundler._keyframes[-2]
+
+                        # Extract feature points
+                        ransac_points, ransac_skip_reason = (
+                            self._get_ransac_inlier_points(latest_frame, ref_frame)
+                        )
+                        surface_points = self._get_masked_surface_points(latest_frame)
+
+                        # Log to files
+                        self.feature_logger.log_feature_points(
+                            frame_id=id_str,
+                            timestamp=color_msg.header.stamp.to_sec(),
+                            ransac_points=ransac_points,
+                            surface_points=surface_points,
+                            ransac_skip_reason=ransac_skip_reason,
+                        )
+                    except Exception as e_log:
+                        rospy.logwarn_throttle(
+                            10.0, f"Feature point logging failed: {e_log}"
+                        )
+
         except Exception as e:
             rospy.logerr(f"Error processing frame: {e}")
             import traceback
@@ -472,9 +721,110 @@ class BundleSdfNode:
 
         self.tf_broadcaster.sendTransform(t_msg)
 
+    def _get_masked_surface_points(self, frame):
+        """Extract 3D points within the foreground mask from frame's point cloud."""
+        try:
+            # Get full organized point cloud (H*W, D)
+            cloud = frame.pointcloud()  # Returns Eigen::MatrixXf as numpy
+
+            # Get frame dimensions
+            H, W = frame._H, frame._W
+
+            # Reshape to (H, W, D)
+            cloud_img = cloud.reshape(H, W, -1)
+
+            # Get mask and ensure it's 2D
+            mask = np.array(frame._fg_mask)
+            mask = np.squeeze(mask)  # Remove any extra dimensions
+            if mask.ndim != 2:
+                mask = mask.reshape(H, W)
+
+            # Extract XYZ columns (columns 0, 1, 2)
+            xyz = cloud_img[:, :, :3]
+
+            # Ensure xyz has shape (H, W, 3) by removing extra dimensions
+            if xyz.shape[-1] == 3 and len(xyz.shape) == 4:
+                xyz = xyz.reshape(H, W, 3)
+
+            # Extract z channel and ensure it's 2D
+            z_channel = xyz[:, :, 2]
+            z_channel = np.squeeze(z_channel)  # Remove any extra dimensions
+            if z_channel.ndim != 2:
+                z_channel = z_channel.reshape(H, W)
+
+            # Ensure both arrays are 2D with matching shapes
+            assert mask.shape == (H, W), f"mask shape {mask.shape} != ({H}, {W})"
+            assert z_channel.shape == (H, W), f"z_channel shape {z_channel.shape} != ({H}, {W})"
+
+            # Filter: mask > 0 AND z > 0.1 (valid depth)
+            valid = (mask > 0) & (z_channel > 0.1)
+
+            points_3d = xyz[valid]
+            return points_3d  # Shape: (N_valid, 3)
+        except Exception as e:
+            rospy.logwarn(f"Failed to get masked surface points: {e}")
+            return None
+
+    def _get_ransac_inlier_points(self, frame, ref_frame):
+        """Extract RANSAC inlier 3D points by reprojecting 2D correspondences."""
+        try:
+            # Check if reference frame exists
+            if ref_frame is None:
+                return None, "no_reference_frame"
+
+            # Get matches between frames
+            pair = (ref_frame, frame)  # Note: order matters for frame pairs
+            if pair not in self.tracker.bundler._fm._matches:
+                # Try reversed pair
+                pair = (frame, ref_frame)
+                if pair not in self.tracker.bundler._fm._matches:
+                    return None, "no_matches_found"
+
+            matches = self.tracker.bundler._fm._matches[pair]
+            if len(matches) == 0:
+                return None, "no_matches_found"
+
+            # Get depth and camera intrinsics
+            depth = np.array(frame._depth).squeeze()  # Remove extra dimensions
+            K = np.array(frame._K).squeeze() if hasattr(frame, "_K") else np.array(self.K).squeeze()
+
+            # Reproject 2D correspondences to 3D using depth
+            points_3d = []
+            for corr in matches:
+                u, v = int(corr._uA), int(corr._vA)
+                if 0 <= v < depth.shape[0] and 0 <= u < depth.shape[1]:
+                    z = float(depth[v, u])  # Ensure scalar
+                    if z > 0.1:  # Valid depth threshold
+                        x = float((u - K[0, 2]) * z / K[0, 0])
+                        y = float((v - K[1, 2]) * z / K[1, 1])
+                        points_3d.append([x, y, z])
+
+            if len(points_3d) == 0:
+                return None, "empty_points"
+
+            return np.array(points_3d, dtype=np.float32), ""
+        except Exception as e:
+            rospy.logwarn(f"Failed to get RANSAC inlier points: {e}")
+            return None, "extraction_error"
+
     def shutdown(self):
         """Clean shutdown of tracker."""
         rospy.loginfo("Shutting down BundleSDF node...")
+
+        # Write final summary if feature logging is enabled
+        if self.enable_feature_logging and self.feature_logger:
+            try:
+                with open(self.feature_logger.log_path, "a") as f:
+                    if not self.shutdown_requested:  # Only write if not already written
+                        f.write("\n" + "=" * 60 + "\n")
+                        f.write("=== SHUTDOWN: Feature point logging completed ===\n")
+                        f.write(f"Total frames processed: {self.frame_count}\n")
+                        f.write("=" * 60 + "\n")
+                        f.flush()
+                rospy.loginfo(f"Feature point logs saved to: {self.feature_logger.log_dir}")
+            except Exception as e:
+                rospy.logwarn(f"Failed to write final log summary: {e}")
+
         if self.tracker is not None:
             self.tracker.on_finish()
 
