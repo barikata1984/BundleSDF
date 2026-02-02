@@ -35,7 +35,7 @@
     <arg name="feature_log_stride" default="1"/>
 
     <!-- Surface point publishing -->
-    <arg name="surface_point_sample_count" default="128"/>
+    <arg name="surface_point_sample_count" default="4096"/>
 
     <!-- BundleSDF Node -->
     <node name="bundlesdf_node" pkg="bundlesdf" type="bundlesdf_node.py" output="screen">
