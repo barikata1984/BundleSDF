@@ -367,6 +367,8 @@ class BundleSdfNode:
         # Increase max_BA_frames to maintain consistency over longer sequences
         cfg_bundletrack["bundle"]["max_BA_frames"] = 20  # Was 10, increased for drift reduction
         cfg_bundletrack["bundle"]["max_optimized_feature_loss"] = 0.03
+        cfg_bundletrack["bundle"]["num_iter_outter"] = 5  # Was 7; NeRF supplements BA pose refinement
+        cfg_bundletrack["bundle"]["num_iter_inner"] = 3   # Was 5; 5x3=15 iterations (was 7x5=35)
         
         # Feature correspondence settings - tightened for better accuracy
         cfg_bundletrack["feature_corres"]["max_dist_neighbor"] = 0.02
@@ -381,6 +383,7 @@ class BundleSdfNode:
         cfg_bundletrack["keyframe"]["min_rot"] = 3  # Was 5, reduced for more keyframes
         
         # RANSAC settings - tighter for better pose estimation
+        cfg_bundletrack["ransac"]["max_iter"] = 1000  # Was 2000; GPU RANSAC converges early with sufficient inliers
         cfg_bundletrack["ransac"]["inlier_dist"] = 0.01
         cfg_bundletrack["ransac"]["inlier_normal_angle"] = 20
         cfg_bundletrack["ransac"]["max_trans_neighbor"] = 0.02
