@@ -1240,49 +1240,55 @@ class BundleSdf:
 
             self.bundler._frames[frame._id] = frame
 
-            self.bundler.selectKeyFramesForBA()
+            # Decide keyframe status BEFORE BA. The criteria (feature count, point cloud,
+            # rotation diversity, co-visibility) depend only on the Procrustes pose and
+            # existing keyframe poses — none require BA output.
+            is_keyframe = self.bundler.checkAndAddKeyframe(frame)
 
-            local_frames = self.bundler._local_frames
-            n_local_frames = len(local_frames)
+            if is_keyframe:
+                # Full BA pipeline for keyframes: their poses persist and feed into NeRF.
+                self.bundler.selectKeyFramesForBA()
 
-            pairs = self.bundler.getFeatureMatchPairs(self.bundler._local_frames)
+                local_frames = self.bundler._local_frames
+                n_local_frames = len(local_frames)
 
-            # Cap BA pairs to prevent spikes from rematch_after_nerf cache invalidation.
-            # Steady state is ~18-20 pairs; spikes reach 69-113 after NeRF pose sync.
-            max_ba_pairs = self.cfg_track.get("bundle", {}).get("max_ba_pairs", 25)
-            if len(pairs) > max_ba_pairs:
-                # Prioritize pairs involving the new frame (most important for current pose)
-                new_frame_pairs = [p for p in pairs if p[0] == frame or p[1] == frame]
-                other_pairs = [p for p in pairs if p[0] != frame and p[1] != frame]
-                pairs = new_frame_pairs + other_pairs[: max_ba_pairs - len(new_frame_pairs)]
-                logging.info(
-                    f"Capped BA pairs: {len(new_frame_pairs) + len(other_pairs)} -> {len(pairs)} "
-                    f"(new_frame={len(new_frame_pairs)}, other={len(pairs) - len(new_frame_pairs)})"
-                )
+                pairs = self.bundler.getFeatureMatchPairs(self.bundler._local_frames)
 
-            n_ba_pairs = len(pairs)
+                # Cap BA pairs to prevent spikes from rematch_after_nerf cache invalidation.
+                max_ba_pairs = self.cfg_track.get("bundle", {}).get("max_ba_pairs", 25)
+                if len(pairs) > max_ba_pairs:
+                    new_frame_pairs = [p for p in pairs if p[0] == frame or p[1] == frame]
+                    other_pairs = [p for p in pairs if p[0] != frame and p[1] != frame]
+                    pairs = new_frame_pairs + other_pairs[: max_ba_pairs - len(new_frame_pairs)]
+                    logging.info(
+                        f"Capped BA pairs: {len(new_frame_pairs) + len(other_pairs)} -> {len(pairs)} "
+                        f"(new_frame={len(new_frame_pairs)}, other={len(pairs) - len(new_frame_pairs)})"
+                    )
 
-            tp, t2, tc, tr = self.find_corres(pairs)
-            n_find_corres_calls += 1
-            t_fm_prep += tp
-            t_fm_2d += t2
-            t_fm_corres += tc
-            t_fm_ransac += tr
+                n_ba_pairs = len(pairs)
 
-            if frame._status == my_cpp.Frame.FAIL:
-                self.bundler.forgetFrame(frame)
-                return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba, n_find_corres_calls, n_ref_retries, n_ba_pairs, n_local_frames
+                tp, t2, tc, tr = self.find_corres(pairs)
+                n_find_corres_calls += 1
+                t_fm_prep += tp
+                t_fm_2d += t2
+                t_fm_corres += tc
+                t_fm_ransac += tr
 
-            find_matches = False
-            t0 = time.time()
-            self.bundler.optimizeGPU(local_frames, find_matches)
-            t_ba = (time.time() - t0) * 1000.0
+                if frame._status == my_cpp.Frame.FAIL:
+                    self.bundler.forgetFrame(frame)
+                    return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba, n_find_corres_calls, n_ref_retries, n_ba_pairs, n_local_frames
 
-            if frame._status == my_cpp.Frame.FAIL:
-                self.bundler.forgetFrame(frame)
-                return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba, n_find_corres_calls, n_ref_retries, n_ba_pairs, n_local_frames
+                find_matches = False
+                t0 = time.time()
+                self.bundler.optimizeGPU(local_frames, find_matches)
+                t_ba = (time.time() - t0) * 1000.0
 
-            self.bundler.checkAndAddKeyframe(frame)
+                if frame._status == my_cpp.Frame.FAIL:
+                    self.bundler.forgetFrame(frame)
+                    return t_fm_prep, t_fm_2d, t_fm_corres, t_fm_ransac, t_ba, n_find_corres_calls, n_ref_retries, n_ba_pairs, n_local_frames
+            else:
+                # Non-keyframe: skip BA. Procrustes pose is sufficient for temporary frames.
+                logging.info(f"frame {frame._id_str} is non-keyframe, skipping BA")
 
         finally:
             pass
