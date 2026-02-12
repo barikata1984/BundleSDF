@@ -356,9 +356,9 @@ class BundleSdfNode:
         with open(cfg_bundletrack_path, "r") as f:
             cfg_bundletrack = yaml.safe_load(f)
 
-        # SPDLOG: 0=trace, 1=debug, 2=info, 3=warn, 4=error, 5=critical (shows this level and below)
-        # To suppress warnings, set to 4 or higher
-        cfg_bundletrack["SPDLOG"] = int(self.debug_level)
+        # C++ spdlog level: 0=off, >=1=all (binary switch in Bundler.cpp).
+        # Set to 0 to suppress C++ warnings; errors still propagate as Python exceptions.
+        cfg_bundletrack["SPDLOG"] = 0
         cfg_bundletrack["depth_processing"]["percentile"] = 95
         cfg_bundletrack["erode_mask"] = 3
         cfg_bundletrack["debug_dir"] = self.output_dir + "/"
