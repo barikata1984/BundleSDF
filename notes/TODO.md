@@ -13,4 +13,4 @@
 - [ ] コンテナ内実行時検証 (import 確認, 実マッチング動作確認, SAM3 streaming 動作確認)
 - [ ] EfficientLoFTR vs 旧 LoFTR の ho3d データセットでの ADD/ADD-S ベンチマーク比較 (劣化なし確認後に既定採用を確定)
 - [ ] BundleSDF 側 ROS ラッパーノード実装 (rgb+depth+mask を同期購読し PoseStamped/TF を配信)
-- [ ] リモート origin 変更 + feat/ros-one-online ブランチの push
+- [x] リモート origin 変更 + feat/ros-one-online ブランチの push (2026-07-02, origin=barikata1984/BundleSDF)
