@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from Utils import *
-from pytorch3d.transforms import so3_log_map,so3_exp_map,se3_exp_map
+from pytorch3d_transforms import so3_log_map, so3_exp_map, se3_exp_map
 
 
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
