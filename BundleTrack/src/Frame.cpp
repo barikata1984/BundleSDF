@@ -44,9 +44,9 @@ Frame::Frame(const py::array_t<uchar> &color, const py::array_t<float> &depth, c
   _H = _color.rows;
   _W = _color.cols;
   
-  _cloud = boost::make_shared<PointCloudRGBNormal>();
-  _cloud_down = boost::make_shared<PointCloudRGBNormal>();
-  _real_model = boost::make_shared<PointCloudRGBNormal>();
+  _cloud = pcl::make_shared<PointCloudRGBNormal>();
+  _cloud_down = pcl::make_shared<PointCloudRGBNormal>();
+  _real_model = pcl::make_shared<PointCloudRGBNormal>();
   
   _depth_gpu = nullptr;
   _color_gpu = nullptr;
@@ -114,8 +114,8 @@ void Frame::init()
 
   Utils::normalizeRotationMatrix(_pose_in_model);
 
-  _cloud = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGBNormal>>();
-  _cloud_down = boost::make_shared<pcl::PointCloud<pcl::PointXYZRGBNormal>>();
+  _cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZRGBNormal>>();
+  _cloud_down = pcl::make_shared<pcl::PointCloud<pcl::PointXYZRGBNormal>>();
 
   if (_roi(0)<0 || _roi(0)>=_W || _roi(1)<0 || _roi(1)>=_W || _roi(2)<0 || _roi(2)>=_H || _roi(3)<0 || _roi(3)>=_H)
   {
