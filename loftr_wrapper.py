@@ -80,7 +80,7 @@ class LoftrRunner:
     # .cuda() before .float(): transfer the original (smaller) dtype, then convert on-device.
     image0 = torch.from_numpy(rgbAs).permute(0,3,1,2).cuda().float()
     image1 = torch.from_numpy(rgbBs).permute(0,3,1,2).cuda().float()
-    if image0.shape[-1]==3:
+    if image0.shape[1]==3:
       image0 = torchvision.transforms.functional.rgb_to_grayscale(image0)
       image1 = torchvision.transforms.functional.rgb_to_grayscale(image1)
     image0 = image0/255.0
@@ -115,7 +115,10 @@ class LoftrRunner:
     mkpts1 = last_data['mkpts1_f'].cpu().numpy()
     mconf = last_data['mconf'].cpu().numpy()
     pair_ids = last_data['m_bids'].cpu().numpy()
-    logging.info(f"mconf, {mconf.min()} {mconf.max()}")
+    if total_n_matches > 0:
+      logging.info(f"mconf, {mconf.min()} {mconf.max()}")
+    else:
+      logging.info("mconf: no matches")
     logging.info(f'pair_ids {pair_ids.shape}')
     corres = np.concatenate((mkpts0.reshape(-1,2),mkpts1.reshape(-1,2),mconf.reshape(-1,1)),axis=-1).reshape(-1,5).astype(np.float32)
 
