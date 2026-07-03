@@ -1,3 +1,51 @@
+# ros_bundlesdf — modernized BundleSDF for ROS One / Ubuntu 22.04
+
+This fork modernizes BundleSDF (below) for current hardware and a ROS One
+deployment. Everything upstream still applies; this section documents what the
+fork changes.
+
+**Stack** (single container, `docker/ros-one.dockerfile`):
+Ubuntu 22.04 (jammy) + [ROS One](https://ros.packages.techfak.net/) + CUDA 12.9
++ PyTorch 2.8.0+cu129 + kaolin 0.18.0 (official wheels) + OpenCV 4.13.0 with
+CUDA (built for `sm_120` / RTX 50 series by default — override with
+`--build-arg CUDA_ARCH_BIN=<cc>` for other GPUs) + distro PCL 1.12 / Eigen /
+pybind11 / yaml-cpp from apt.
+
+**Changes over upstream**
+
+- **EfficientLoFTR** is the default feature matcher (vendored under
+  `BundleTrack/EfficientLoFTR/`). Select with `BUNDLESDF_MATCHER=eloftr|loftr`;
+  the original LoFTR path is kept for comparison.
+- **SAM 3 segmenter ROS node** (`ros/sam3_segmenter/`): text-prompted online
+  mask propagation publishing `/sam3/mask`, replacing the XMem gap upstream
+  could not ship. See its README for the topic contract and gated weights.
+- **pytorch3d dependency removed**: the three transform functions actually
+  used are vendored in `pytorch3d_transforms/`.
+- PCL 1.11+ (std::shared_ptr) compatibility, Blackwell (`sm_120`) CUDA
+  arches, and assorted correctness/performance fixes — see `notes/` for the
+  full log, issues, and benchmark records.
+
+**Build**
+
+```bash
+docker build -f docker/ros-one.dockerfile -t bundlesdf:ros-one .   # image
+docker run -d --name bundlesdf_bench --gpus all --network=host --ipc=host \
+  -v $(pwd):/workspace -w /workspace bundlesdf:ros-one sleep infinity
+docker exec bundlesdf_bench bash build.sh                          # my_cpp + mycuda
+```
+
+**Benchmark** (milk demo sequence, weights + data per `notes/TODO.md`):
+
+```bash
+docker exec bundlesdf_bench bash scripts/bench_milk.sh
+# per-frame timings, pose consistency and logs land in data/bench_results/
+```
+
+Set `BUNDLESDF_PROFILE=1` to write per-stage timing CSVs (`perf_main.csv`,
+`perf_nerf.csv`) into the output folder.
+
+---
+
 # BundleSDF: Neural 6-DoF Tracking and 3D Reconstruction of Unknown Objects
 
 This is an implementation of our paper published in CVPR 2023
