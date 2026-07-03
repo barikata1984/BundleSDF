@@ -1,11 +1,15 @@
 # sam3_segmenter
 
-SAM 3 text-prompted streaming segmentation as a ROS (ROS One / noble) node.
+SAM 3 text-prompted streaming segmentation as a ROS (ROS One) node.
 It subscribes to an RGB stream, tracks a single object described by a text
 prompt, and publishes a binary mask for the downstream BundleSDF tracker.
 
-This node runs in its own container (`docker/segmenter.dockerfile`), separate
-from the BundleSDF core.
+This node runs in the main BundleSDF container (`docker/ros-one.dockerfile`,
+Python 3.10). SAM 3 via the transformers integration works on Python >= 3.10
+(the "Python 3.12+" note in the upstream sam3 README is contradicted by its
+own pyproject and by working 3.10 deployments); only the transformers package
+gates the version. It stays a separate node/process from the tracker, joined
+by the mask topic below.
 
 ## Topic contract
 
@@ -74,5 +78,5 @@ roslaunch sam3_segmenter sam3_segmenter.launch \
 
 - `python3 -m py_compile` passes for the node.
 - Running as a live `rosnode` requires the container (torch / transformers /
-  rospy). Building the image and downloading the weights are **out of scope**
-  here; do that per `docker/segmenter.dockerfile` and the weights section above.
+  rospy). Build the image per `docker/ros-one.dockerfile` and download the
+  weights per the section above.

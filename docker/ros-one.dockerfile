@@ -107,11 +107,14 @@ RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
       "Cython>=0.29.37" yacs scipy scikit-learn opencv-python pytorch_lightning \
       awscli-plugin-endpoint gputil xatlas pymeshlab rtree dearpygui \
       pytinyrenderer PyQt5 cython-npm chardet openpyxl && \
+    pip3 install --no-cache-dir "transformers==5.12.1" "huggingface_hub>=0.35" accelerate && \
     pip3 install --no-cache-dir numpy==1.26.4
 
 ENV CUDA_HOME=/usr/local/cuda
 ENV OPENCV_IO_ENABLE_OPENEXR=1
 ENV PYTHONUNBUFFERED=1
+# SAM3 weights are gated + large; keep the HF cache on a mounted volume
+ENV HF_HOME=/hf_cache
 
 RUN imageio_download_bin freeimage || true
 
