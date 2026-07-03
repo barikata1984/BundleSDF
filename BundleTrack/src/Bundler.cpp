@@ -898,6 +898,7 @@ void Bundler::optimizeGPU(std::vector<std::shared_ptr<Frame>> &frames, bool find
   {
     SPDLOG("frame {} few global_corres, mark as FAIL",_newframe->_id_str);
     _newframe->_status = Frame::FAIL;
+    return;
   }
 
   const int H = frames[0]->_H;

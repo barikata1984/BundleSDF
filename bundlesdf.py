@@ -755,8 +755,11 @@ class BundleSdf:
       logging.info("percentile denoise start")
       with self.prof.span('depth_denoise'):
         valid = (depth>=0.1) & (mask>0)
-        thres = np.percentile(depth[valid], percentile)
-        depth[depth>=thres] = 0
+        if valid.any():
+          thres = np.percentile(depth[valid], percentile)
+          depth[depth>=thres] = 0
+        else:
+          logging.info("percentile denoise skipped: no valid depth pixels (full occlusion / frame-out)")
       logging.info("percentile denoise done")
 
     with self.prof.span('make_frame'):
