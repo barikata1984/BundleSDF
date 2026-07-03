@@ -506,17 +506,15 @@ void Bundler::selectKeyFramesForBA()
   else if (method=="normal_orientation_nearest")
   {
     frames = {_newframe};
-    std::vector<float> visibles(_keyframes.size());
-
-    #pragma omp parallel for schedule (dynamic)
-    for (int i=0;i<_keyframes.size();i++)
+    const int n_kf = _keyframes.size();
+    std::vector<float> visibles(n_kf);
+    std::vector<Eigen::Matrix4f> cur_in_kfcam(n_kf);
+    for (int i=0;i<n_kf;i++)
     {
-      const auto &kf = _keyframes[i];
-      // float visible = computeCovisibilityCuda(_newframe, kf);
-      float visible = computeCovisibility(_newframe, kf);
-      visibles[i] = visible;
-      // SPDLOG("{} and {} visible: {}", _newframe->_id_str, kf->_id_str, visible);
+      cur_in_kfcam[i] = _keyframes[i]->_pose_in_model.inverse() * _newframe->_pose_in_model;
     }
+    const float thres = std::cos((*yml)["visible_angle"].as<float>()/180.0*M_PI);
+    CUDAImageUtil::computeCovisibilityBatch(_newframe->_H, _newframe->_W, _newframe->_K, cur_in_kfcam.data(), n_kf, thres, _newframe->_normal_gpu, _newframe->_depth_gpu, visibles.data());
     std::vector<int> ids = Utils::vectorArgsort(visibles, false);
     SPDLOG("ids#={}, max_BA_frames-frames.size()={}",ids.size(), max_BA_frames-frames.size());
     for (int i=0;i<ids.size();i++)

@@ -1225,4 +1225,80 @@ float computeCovisibility(const int H, const int W, int umin, int vmin, int umax
 }
 
 
+__global__ void computeCovisibilityBatchKernel(const int H, const int W, const int stride, const Eigen::Matrix4f *cur_in_kfcam, const int n_kf, const float visible_angle_thres, const float4 *xyz_mapA, const float4 *normalA, int *n_visible, int *n_total)
+{
+	const int w = (blockIdx.x*blockDim.x + threadIdx.x) * stride;
+	const int h = (blockIdx.y*blockDim.y + threadIdx.y) * stride;
+	const int kf = blockIdx.z;
+	if (w >= W || h >= H || kf >= n_kf) return;
+
+	const int i_pix = h*W+w;
+	float4 ptA = xyz_mapA[i_pix];
+	if (ptA.z<0.1) return;
+	float4 normalA_tmp = normalA[i_pix];
+	if (normalA_tmp.x==0 && normalA_tmp.y==0 && normalA_tmp.z==0) return;
+
+	const Eigen::Matrix4f &M = cur_in_kfcam[kf];
+	Eigen::Vector3f ptA_ = (M * Eigen::Vector4f(ptA.x, ptA.y, ptA.z, 1)).head(3);
+	Eigen::Vector3f normalA_ = M.block(0,0,3,3) * Eigen::Vector3f(normalA_tmp.x, normalA_tmp.y, normalA_tmp.z);
+	Eigen::Vector3f pt_to_eye = -ptA_;
+	float dot_prod = pt_to_eye.normalized().dot(normalA_.normalized());
+
+	atomicAdd(&n_total[kf], 1);
+	if (dot_prod>visible_angle_thres)
+	{
+		atomicAdd(&n_visible[kf], 1);
+	}
+}
+
+
+void computeCovisibilityBatch(const int H, const int W, const Eigen::Matrix3f &K, const Eigen::Matrix4f *cur_in_kfcam, const int n_kf, const float visible_angle_thres, const float4 *normalA, const float *depthA, float *visibles_out)
+{
+  const int n_pixels = H*W;
+
+  float4 *xyz_map_gpu;
+  cudaMalloc(&xyz_map_gpu, n_pixels*sizeof(float4));
+  cudaMemset(xyz_map_gpu, 0, n_pixels*sizeof(float4));
+  float4x4 K_inv_data;
+  K_inv_data.setIdentity();
+  Eigen::Matrix3f K_inv = K.inverse();
+  for (int row=0;row<3;row++)
+  {
+    for (int col=0;col<3;col++)
+    {
+      K_inv_data(row,col) = K_inv(row,col);
+    }
+  }
+  CUDAImageUtil::convertDepthFloatToCameraSpaceFloat4(xyz_map_gpu, depthA, K_inv_data, W, H);
+
+  Eigen::Matrix4f *cur_in_kfcam_gpu;
+  cudaMalloc(&cur_in_kfcam_gpu, n_kf*sizeof(Eigen::Matrix4f));
+  cudaMemcpy(cur_in_kfcam_gpu, cur_in_kfcam, n_kf*sizeof(Eigen::Matrix4f), cudaMemcpyHostToDevice);
+
+  int *n_visible_gpu, *n_total_gpu;
+  cudaMalloc(&n_visible_gpu, n_kf*sizeof(int));
+  cudaMemset(n_visible_gpu, 0, n_kf*sizeof(int));
+  cudaMalloc(&n_total_gpu, n_kf*sizeof(int));
+  cudaMemset(n_total_gpu, 0, n_kf*sizeof(int));
+
+  const int stride = 2;
+  dim3 threads = {32, 32, 1};
+  dim3 blocks = {divCeil(int(W/stride), threads.x), divCeil(int(H/stride), threads.y), (unsigned int)n_kf};
+  CUDAImageUtil::computeCovisibilityBatchKernel<<<blocks, threads>>>(H, W, stride, cur_in_kfcam_gpu, n_kf, visible_angle_thres, xyz_map_gpu, normalA, n_visible_gpu, n_total_gpu);
+
+  std::vector<int> n_visible(n_kf), n_total(n_kf);
+  cutilSafeCall(cudaMemcpy(n_visible.data(), n_visible_gpu, n_kf*sizeof(int), cudaMemcpyDeviceToHost));
+  cutilSafeCall(cudaMemcpy(n_total.data(), n_total_gpu, n_kf*sizeof(int), cudaMemcpyDeviceToHost));
+  for (int i=0;i<n_kf;i++)
+  {
+    visibles_out[i] = float(n_visible[i])/n_total[i];
+  }
+
+  cutilSafeCall(cudaFree(xyz_map_gpu));
+  cutilSafeCall(cudaFree(cur_in_kfcam_gpu));
+  cutilSafeCall(cudaFree(n_visible_gpu));
+  cutilSafeCall(cudaFree(n_total_gpu));
+}
+
+
 };

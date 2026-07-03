@@ -50,6 +50,7 @@ namespace CUDAImageUtil
 	//static void undistort(float* d_depth, const mat3f& intrinsics, const float3& distortionParams, T defaultValue, const BaseImage<T>& noiseMask = BaseImage<T>())
 
 	float computeCovisibility(const int H, const int W, int umin, int vmin, int umax, int vmax, const Eigen::Matrix3f &K, const Eigen::Matrix4f &cur_in_kfcam, const float visible_angle_thres, const float4 *normalA, const float *depthA);
+	void computeCovisibilityBatch(const int H, const int W, const Eigen::Matrix3f &K, const Eigen::Matrix4f *cur_in_kfcam, const int n_kf, const float visible_angle_thres, const float4 *normalA, const float *depthA, float *visibles_out);
 };
 
 //TODO
