@@ -283,3 +283,29 @@ bench-verify のフルベンチ実行前, frame 116 (初回 NeRF ラウンド) �
 実行中に判明した副次的な事象として, プロセス完了判定に `kill -0 <PID>` を使ったところ, プロセス終了後もゾンビ状態 (`<defunct>`) の間は `kill -0` が真を返し続け, 完了検知が遅延する事象が発生した (実害なし, 監視方法の教訓として記録).
 
 生データ保存場所: loftr 姿勢出力 `data/bench_results/ho3d_ours_loftr/SM1/ob_in_cam/`, loftr benchmark 出力 `data/bench_results/ho3d_log_loftr/` (ho3d_ours.xlsx/.pkl, pred_mesh*, gt/pred ply), loftr 実行ログ `data/bench_results/loftr_bench_run.log`, eloftr 既存結果 (今回変更なし) `data/bench_results/ho3d_ours/SM1/`, `data/bench_results/ho3d_log/`.
+
+## 2026-07-03 (続き): 既知バグ3件の修正と VRAM 計測ロジックのフルベンチ動作確認
+
+### gridencoder ModuleNotFoundError の恒久対処
+
+前節で記録した gridencoder の `ModuleNotFoundError` を恒久対処した. `mycuda/torch_ngp_grid_encoder/grid.py:14` に `sys.path.append(os.path.dirname(code_dir))` を 1 行追加し, `gridencoder.so` の実配置場所である親ディレクトリ `mycuda/` を `sys.path` に加えた. 既存の `sys.path.append(code_dir)` はそのまま残置している. Python ファイルのみの変更であり再ビルドは不要だった.
+
+検証には, `min_rot`/`start_nerf_keyframes` を一時的に下げて NeRF ラウンドを早期に発火させる 80 フレームのスモークテストを用いた. NeRF ワーカー (`multiprocessing.Process` で spawn) が実際に起動し, `PYTHONPATH` ハックなしで `GridEncoder` のロードに成功し, 複数ラウンドが完走することを確認した. これにより, これまで NeRF を回す全実行に必要だった `PYTHONPATH=/workspace/mycuda` によるその場しのぎの回避策は不要になった. git diff で変更内容を確認済みだが未コミット.
+
+### REVIEW_findings #5 (percentile 空配列クラッシュ) の修正
+
+`bundlesdf.py:757-762` に `if valid.any():` ガードを追加した. 完全遮蔽やフレームアウトで `valid` 配列が全 False になったとき, `np.percentile(空配列)` が `IndexError` で落ちる問題を修正するもので, 有効画素がないときは閾値計算と denoise をスキップしてログ出力のみ行うようにした. denoise は「遠すぎる深度を 0 にする」処理であり, 有効画素がゼロならそもそも denoise 対象も存在しないため, スキップが妥当な挙動と判断した. 最小再現で, 旧コードは `IndexError` で落ち, 新コードは安全にスキップすることを確認した. Python のみの変更で再ビルド不要. git diff で確認済みだが未コミット.
+
+### REVIEW_findings #8 (FAIL 非 return) の修正
+
+`BundleTrack/src/Bundler.cpp:901` (`Bundler::optimizeGPU` 内) で, `global_corres.size()==0` のとき FAIL フラグを立てた直後に `return;` を追加した. 修正前は FAIL を立てても処理を続行し, 対応点ゼロのまま最適化した無意味な結果を無条件に書き戻していた. 呼び出し元 (`bundlesdf.py:721` 付近) は `_status==FAIL` を見て forgetFrame + return するため, 早期 return を追加しても後続処理への悪影響はない. C++ の変更のため `bash build.sh` で `my_cpp` 拡張を再ビルドし, 警告のみでエラーがないことを確認した. `global_corres=0` の意図的な再現は困難なため, 80 フレームのスモークベンチで正常系 (optimizeGPU 経路が多数回実行される通常のトラッキング) が壊れていないことを確認して代替とした. git diff で確認済みだが未コミット.
+
+以上 3 件の変更対象ファイルは `mycuda/torch_ngp_grid_encoder/grid.py`, `bundlesdf.py`, `BundleTrack/src/Bundler.cpp` の 3 つで, いずれも未コミットのまま作業ツリーに残置している.
+
+### VRAM 計測ロジックのフルベンチ動作確認
+
+前節で実装した VRAM 計測ロジック (`perf_logger.py`/`bench_milk.sh`) について, 「smoke test のみ確認済みでフルベンチでの動作確認は未実施」だった残課題を解消した.
+
+`BUNDLESDF_PROFILE=1 BUNDLESDF_MATCHER=eloftr scripts/bench_milk.py --max_frames 30` を実行し (出力先 `data/out_milk_vramcheck/`, 既存のフルベンチ出力とは別ディレクトリ), `perf_main.csv` の末尾に `vram_alloc_mib`/`vram_reserved_mib` 列が実際に出力されることを確認した. 値は 1 フレーム目が alloc 314.3 / reserved 534.0 MiB, 定常が alloc 322.5 / reserved 954.0 MiB で, alloc はほぼ一定でリークの兆候はなく, reserved はキャッシュアロケータのウォームアップ後にプラトーに達する妥当な挙動だった. `perf_nerf.csv` もヘッダに両列が正しく含まれることを確認したが, 30 フレームではキーフレーム蓄積が 1 個のみで NeRF ラウンド自体が発火しておらず, データ行での実値確認はできていない (列スキーマの正しさのみ確認済み).
+
+`scripts/bench_milk.sh` の `start_gpu_mon`/`stop_gpu_mon` 機構についても, 12 秒の直接実行で `eloftr_gpu_mem.csv` が想定どおりの形式 (timestamp, memory.used, memory.total) で出力され, 停止後に nvidia-smi のゾンビプロセスが残留しないことを確認した. 既存の集計ツール `scripts/perf_stats.py` が新しい CSV を読み込んでもエラーを出さないことも確認した. 本節の作業はいずれも動作確認のみでコード変更はなく, コミットもしていない.
