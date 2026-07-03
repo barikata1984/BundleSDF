@@ -53,7 +53,7 @@ class Sam3SegmenterNode:
     masks = processed['masks']
     if masks is None or len(masks) == 0:
       return np.zeros((height, width), dtype=np.uint8)
-    masks = masks.to('cpu').numpy().astype(bool)
+    masks = masks.to('cpu').numpy().astype(bool, copy=False)
     scores = processed.get('scores')
     if scores is None:
       idx = int(np.argmax(masks.reshape(len(masks), -1).sum(axis=1)))

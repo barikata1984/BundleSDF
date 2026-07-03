@@ -18,7 +18,7 @@ from BundleTrack.scripts.data_reader import *
 from Utils import *
 from loftr_wrapper import LoftrRunner
 from perf_logger import get_profiler
-import multiprocessing,threading
+import multiprocessing,threading,queue
 import torch
 from typing import Dict
 try:
@@ -495,12 +495,41 @@ class BundleSdf:
     self.K = None
     self.mesh = None
 
+    # Background worker for saveNewframeResult(): the C++ call is pure I/O (writes
+    # files under debug_dir, reads but does not mutate _newframe/_keyframes/_frames)
+    # so it is safe to run off the frame loop's return path. Ordering is preserved by
+    # self._save_result_queue.join() in process_new_frame(), which blocks the next
+    # frame's self.bundler._newframe reassignment until the previous frame's save has
+    # actually finished (not just been dequeued).
+    self._save_result_queue = queue.Queue()
+    self._save_result_thread = threading.Thread(target=self._save_result_worker, daemon=True)
+    self._save_result_thread.start()
+
+
+  def _save_result_worker(self):
+    while True:
+      item = self._save_result_queue.get()
+      if item is None:
+        self._save_result_queue.task_done()
+        break
+      try:
+        self.bundler.saveNewframeResult()
+      except Exception:
+        logging.exception("async saveNewframeResult() failed")
+      finally:
+        self._save_result_queue.task_done()
+
 
   def on_finish(self):
     if self.use_gui:
       with self.gui_lock:
         self.gui_dict['join'] = True
       self.gui_worker.join()
+
+    # Drain any pending save before shutting down so the last frame's output isn't lost.
+    self._save_result_queue.join()
+    self._save_result_queue.put(None)
+    self._save_result_thread.join()
 
     with self.lock:
       self.p_dict['join'] = True
@@ -569,8 +598,13 @@ class BundleSdf:
 
 
   def process_new_frame(self, frame):
-    logging.info(f"process frame {frame._id_str}")
+    logging.info("process frame %s", frame._id_str)
 
+    # Wait for the previous frame's background saveNewframeResult() (if any) to
+    # actually finish before reassigning _newframe, since that call reads _newframe
+    # (and _keyframes/_frames/_local_frames) without synchronization of its own.
+    with self.prof.span('save_result_wait'):
+      self._save_result_queue.join()
     self.bundler._newframe = frame
     os.makedirs(self.debug_dir, exist_ok=True)
 
@@ -729,10 +763,10 @@ class BundleSdf:
       frame = self.make_frame(color, depth, K, id_str, mask, occ_mask, pose_in_model)
     os.makedirs(f"{self.debug_dir}/{frame._id_str}", exist_ok=True)
 
-    logging.info(f"processNewFrame start {frame._id_str}")
+    logging.info("processNewFrame start %s", frame._id_str)
     # self.bundler.processNewFrame(frame)
     self.process_new_frame(frame)
-    logging.info(f"processNewFrame done {frame._id_str}")
+    logging.info("processNewFrame done %s", frame._id_str)
 
     if self.bundler._keyframes[-1]==frame:
       logging.info(f"{frame._id_str} prepare data for nerf")
@@ -814,7 +848,12 @@ class BundleSdf:
           logging.info(f"after matches keys: {len(self.bundler._fm._matches)}")
 
     with self.prof.span('save_result'):
-      self.bundler.saveNewframeResult()
+      # Offloaded to a background thread (see _save_result_worker); the actual
+      # saveNewframeResult() I/O now runs concurrently with the rest of this frame's
+      # tail and the start of the next frame's, instead of blocking here. Ordering
+      # (no torn/duplicated writes across frames) is enforced by the queue.join() in
+      # process_new_frame() before _newframe is reassigned.
+      self._save_result_queue.put(1)
     if self.SPDLOG>=2 and occ_mask is not None:
       os.makedirs(f'{self.debug_dir}/occ_mask/', exist_ok=True)
       cv2.imwrite(f'{self.debug_dir}/occ_mask/{frame._id_str}.png', occ_mask)

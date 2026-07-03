@@ -77,8 +77,9 @@ class LoftrRunner:
     '''
     h0, w0 = rgbAs.shape[1], rgbAs.shape[2]
     h1, w1 = rgbBs.shape[1], rgbBs.shape[2]
-    image0 = torch.from_numpy(rgbAs).permute(0,3,1,2).float().cuda()
-    image1 = torch.from_numpy(rgbBs).permute(0,3,1,2).float().cuda()
+    # .cuda() before .float(): transfer the original (smaller) dtype, then convert on-device.
+    image0 = torch.from_numpy(rgbAs).permute(0,3,1,2).cuda().float()
+    image1 = torch.from_numpy(rgbBs).permute(0,3,1,2).cuda().float()
     if image0.shape[-1]==3:
       image0 = torchvision.transforms.functional.rgb_to_grayscale(image0)
       image1 = torchvision.transforms.functional.rgb_to_grayscale(image1)
@@ -96,8 +97,7 @@ class LoftrRunner:
       i_b = 0
       for b in range(0,len(last_data['image0']),batch_size):
         tmp = {'image0': last_data['image0'][b:b+batch_size], 'image1': last_data['image1'][b:b+batch_size]}
-        with torch.no_grad():
-          self.matcher(tmp)
+        self.matcher(tmp)
         tmp['m_bids'] += i_b
         for k in ret_keys:
           if k not in last_data:
@@ -126,11 +126,11 @@ class LoftrRunner:
       pair_ids = pair_ids[valid]
 
     logging.info(f'corres: {corres.shape}')
-    corres_tmp = []
-    for i in range(len(rgbAs)):
-      cur_corres = corres[pair_ids==i]
-      corres_tmp.append(cur_corres)
-    corres = corres_tmp
+    # Split by pair id via a single stable sort instead of one full boolean scan of
+    # `corres` per pair (previously O(n_pairs * n_matches)).
+    order = np.argsort(pair_ids, kind='stable')
+    split_at = np.searchsorted(pair_ids[order], np.arange(1, len(rgbAs)))
+    corres = np.split(corres[order], split_at)
 
     del last_data, image0, image1
 

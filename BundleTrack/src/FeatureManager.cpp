@@ -1709,6 +1709,7 @@ void SiftManager::runRansacMultiPairGPU(const std::vector<std::pair<std::shared_
     cutilSafeCall(cudaFree(normalsB_gpu[i]));
     cutilSafeCall(cudaFree(uvA_gpu[i]));
     cutilSafeCall(cudaFree(uvB_gpu[i]));
+    cutilSafeCall(cudaFree(confs_gpu[i]));
   }
 
 
