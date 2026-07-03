@@ -3,7 +3,7 @@
 # Repo is bind-mounted at runtime (see run_container.sh); nothing from the source
 # tree (including model weights) is copied into the image.
 
-ARG CUDA_GENERATION=Blackwell
+ARG CUDA_ARCH_BIN=12.0
 
 ########################################
 # Stage 1: build OpenCV with CUDA
@@ -11,7 +11,7 @@ ARG CUDA_GENERATION=Blackwell
 FROM nvidia/cuda:12.9.2-devel-ubuntu22.04 AS opencv-builder
 
 ARG OPENCV_VERSION=4.13.0
-ARG CUDA_GENERATION
+ARG CUDA_ARCH_BIN=12.0
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,7 +33,8 @@ RUN cmake -S /opencv -B /opencv/build -GNinja \
       -DCMAKE_INSTALL_PREFIX=/opt/opencv-cuda \
       -DOPENCV_EXTRA_MODULES_PATH=/opencv_contrib/modules \
       -DWITH_CUDA=ON \
-      -DCUDA_GENERATION=${CUDA_GENERATION} \
+      -DCUDA_ARCH_BIN=${CUDA_ARCH_BIN} \
+      -DCUDA_ARCH_PTX="" \
       -DBUILD_LIST=core,imgproc,calib3d,features2d,highgui,cudev,cudaarithm,cudafilters,cudawarping,cudafeatures2d,cudaimgproc,cudaoptflow \
       -DBUILD_TESTS=OFF \
       -DBUILD_PERF_TESTS=OFF \
