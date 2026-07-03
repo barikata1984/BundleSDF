@@ -1,0 +1,31 @@
+{
+  "name": "ros_bundlesdf (ROS One)",
+
+  // Wraps the existing docker/docker-compose.yml (same file `docker compose`
+  // uses standalone) -- no separate devcontainer-only compose/Dockerfile.
+  "dockerComposeFile": ["../docker/docker-compose.yml"],
+  "service": "bundlesdf",
+  "workspaceFolder": "/workspace",
+
+  // ros-one.dockerfile has no non-root user; container runs as root.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-iot.vscode-ros",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens",
+        "redhat.vscode-yaml"
+      ]
+    }
+  },
+
+  // Don't stop the compose service when the VS Code window closes -- other
+  // shells (docker compose exec) or the osx-side integration may still need
+  // roscore/nodes running in it.
+  "shutdownAction": "none"
+}

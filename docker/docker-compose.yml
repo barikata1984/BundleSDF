@@ -1,0 +1,43 @@
+services:
+  bundlesdf:
+    build:
+      context: ..
+      dockerfile: docker/ros-one.dockerfile
+      args:
+        CUDA_ARCH_BIN: "12.0"
+    image: bundlesdf:ros-one
+    container_name: bundlesdf
+    network_mode: host
+    ipc: host
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - NVIDIA_DISABLE_REQUIRE=1
+      # ROS One / cross-container networking (both containers use
+      # network_mode: host, so loopback is shared -- see notes/LOGS).
+      - ROS_MASTER_URI=http://127.0.0.1:11311
+      - ROS_IP=127.0.0.1
+      - DISPLAY=${DISPLAY}
+      - GIT_INDEX_FILE
+    volumes:
+      - ..:/workspace
+      - /home:/home
+      - /tmp:/tmp
+      - /mnt:/mnt
+      - hf_cache:/hf_cache
+    working_dir: /workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+
+volumes:
+  hf_cache:

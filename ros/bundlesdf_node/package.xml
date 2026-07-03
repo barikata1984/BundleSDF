@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>bundlesdf_node</name>
+  <version>0.0.1</version>
+  <description>Online BundleSDF tracking node. Subscribes time-synchronized
+  rgb/depth/mask, runs the tracker per frame, and publishes the tracked
+  object's 6-DoF pose as PoseStamped and TF.</description>
+
+  <maintainer email="franche1984@gmail.com">barikata1984</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <export>
+  </export>
+</package>
