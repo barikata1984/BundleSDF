@@ -263,3 +263,23 @@ bench-verify のフルベンチ実行前, frame 116 (初回 NeRF ラウンド) �
 原因は `mycuda/setup.py` の `gridencoder` 拡張がトップレベルのモジュールとしてビルドされ, `.so` が `/workspace/mycuda/gridencoder.cpython-310-*.so` に配置される一方, `mycuda/torch_ngp_grid_encoder/grid.py:23` は自ディレクトリのみを `sys.path` に足して bare `import gridencoder` していることにある. NeRF ワーカーは `multiprocessing.Process` で spawn され, その `sys.path` は repo root のみを含むため, `gridencoder` を解決できない. 7/2 時点の baseline ではこのエラーが出ていなかったが, これは当時 `.so` が別の場所にあったためで, 直近のリビルドで配置パスが変わったことが原因と考えられる.
 
 今回は config・コードを変更せず, NeRF ワーカー起動時の環境変数に `PYTHONPATH=/workspace/mycuda` を追加してその場しのぎで回避したのみである. これは NeRF を回す全ての実行に影響する環境問題であり, `grid.py` が親ディレクトリを `sys.path` に足すように直すか, `gridencoder` を import 可能な場所に install するかたちの恒久対処が必要で, 次回セッションの最優先課題とする.
+
+### eloftr vs loftr の HO3D SM1 ADD/ADD-S 比較 (既定バックエンド確定)
+
+`BUNDLESDF_MATCHER=loftr PYTHONPATH=/workspace/mycuda python3 run_ho3d.py --video_dirs data/HO3D_v3/evaluation/SM1 --out_dir data/bench_results/ho3d_ours_loftr` を実行し, HO3D SM1 (マスタードボトル, 898 フレーム) を loftr バックエンドで完走させた. 898/898 フレームで `ob_in_cam/*.txt` を出力し, gridencoder エラー・Traceback・CUDA error・Killed のいずれもゼロだった. 壁時計は約 364.6 秒 (03:13:21.92 開始→03:19:26.47 終了, 実測). `config.yml`/コードは無変更で, 環境変数 `PYTHONPATH=/workspace/mycuda` のみで gridencoder 問題 (既知の環境問題, `notes/ISSUES.md` 記載) を回避した. eloftr の既存結果は上書きせず, 別ディレクトリ (`data/bench_results/ho3d_ours_loftr/`, `data/bench_results/ho3d_log_loftr/`) に分離して保存した.
+
+`benchmark_ho3d.py` で生 pkl から再計算し検証した精度比較は次のとおり (両者とも n=895, 898 フレーム中 3 フレームは評価対象外. eloftr/loftr 共通仕様のため比較の公平性に影響しない. 同一 warm-start 設定・同一 seed=0 で条件は揃えている).
+
+| 指標 | eloftr (既定, 現行) | loftr (旧) | 差 |
+|---|---|---|---|
+| ADD mean (cm) ↓ | 2.20 (2.1954) | 2.77 (2.7671) | +0.57cm (loftr 悪化, +26%) |
+| ADD-S mean (cm) ↓ | 0.98 (0.9833) | 1.21 (1.2083) | +0.23cm (loftr 悪化, +23%) |
+| ADD_AUC (%) ↑ | 78.10 (78.099) | 72.39 (72.389) | -5.71pt (loftr 悪化) |
+| ADDS_AUC (%) ↑ | 90.18 (90.184) | 87.94 (87.939) | -2.24pt (loftr 悪化) |
+| chamfer (cm) | 0.52 (0.518) | 0.525 | +0.005cm (実質同等, NeRF 由来でバックエンド非依存のため妥当) |
+
+姿勢精度 (ADD/ADD-S/AUC) の 4 指標すべてで eloftr が明確に優位だった. ADD_AUC で 5.7 ポイント, ADD 平均で 26% の差があり, 898 フレーム規模のサンプルでは誤差の範囲を超える有意差と判断した. 既定バックエンドを eloftr とする根拠が得られ, `notes/PERF_plan.md` の「既定採用の確定は精度比較 (HO3D の ADD/ADD-S) を待つ」というゲート条件は満たされた. これにより `notes/PERF_plan.md` 改善項目 2 の「マッチャーの opt 設定への切替」(現状 eloftr 前提で議論されている項目) の前提も確定した. なお, これは SM1 単一動画・単一 seed での比較であり, 他動画での再現性までは確認していない.
+
+実行中に判明した副次的な事象として, プロセス完了判定に `kill -0 <PID>` を使ったところ, プロセス終了後もゾンビ状態 (`<defunct>`) の間は `kill -0` が真を返し続け, 完了検知が遅延する事象が発生した (実害なし, 監視方法の教訓として記録).
+
+生データ保存場所: loftr 姿勢出力 `data/bench_results/ho3d_ours_loftr/SM1/ob_in_cam/`, loftr benchmark 出力 `data/bench_results/ho3d_log_loftr/` (ho3d_ours.xlsx/.pkl, pred_mesh*, gt/pred ply), loftr 実行ログ `data/bench_results/loftr_bench_run.log`, eloftr 既存結果 (今回変更なし) `data/bench_results/ho3d_ours/SM1/`, `data/bench_results/ho3d_log/`.

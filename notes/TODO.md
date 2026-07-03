@@ -18,7 +18,17 @@
 
 - [ ] コンテナ (`ros-one.dockerfile`, SAM3 統合済み単一イメージ) の GHCR push (`segmenter.dockerfile` は py3.10 統合により廃止)
 - [ ] SAM3 重み配置 (HF gated リポジトリ要承認申請)
-- [ ] EfficientLoFTR vs 旧 LoFTR の ho3d データセットでの ADD/ADD-S ベンチマーク比較 (劣化なし確認後に既定採用を確定. NeRF warm-start の絶対精度確認も兼ねる予定だったが, warm-start はユーザー判断で速度優先採用済みのため, 本項目にとっては優先度を下げた任意の確認事項). HO3D GT ベンチの枠組み自体は 2026-07-03 に整備済み (`run_ho3d.py`/`benchmark_ho3d.py` が SM1 で完走確認済み, 上記完了項目参照). `BUNDLESDF_MATCHER=loftr` で再実行し既定 (eloftr) の結果 (ADD 2.20cm/ADD-S 0.98cm) と比較すれば着手できる
+- [x] EfficientLoFTR vs 旧 LoFTR の ho3d データセットでの ADD/ADD-S ベンチマーク比較 (2026-07-03). `BUNDLESDF_MATCHER=loftr PYTHONPATH=/workspace/mycuda python3 run_ho3d.py --video_dirs data/HO3D_v3/evaluation/SM1 --out_dir data/bench_results/ho3d_ours_loftr` で SM1 (mustard bottle, 898 フレーム) を loftr バックエンドで完走させ (898/898 フレームで `ob_in_cam/*.txt` 出力, gridencoder エラー・Traceback・CUDA error・Killed いずれもゼロ, 壁時計約 364.6 秒), config.yml/コードは無変更で環境変数 `PYTHONPATH=/workspace/mycuda` のみで gridencoder 問題 (`notes/ISSUES.md` 記載の既知の環境問題) を回避した. eloftr の既存結果は上書きせず別ディレクトリ (`data/bench_results/ho3d_ours_loftr/`, `data/bench_results/ho3d_log_loftr/`) に分離して保存. `benchmark_ho3d.py` で生 pkl から再計算し検証した精度比較 (n=895, 両者共通で 898 フレーム中 3 フレームは評価対象外, 同一 warm-start 設定・同一 seed=0) は次のとおり.
+
+  | 指標 | eloftr (既定, 現行) | loftr (旧) | 差 |
+  |---|---|---|---|
+  | ADD mean (cm) ↓ | 2.20 (2.1954) | 2.77 (2.7671) | +0.57cm (loftr 悪化, +26%) |
+  | ADD-S mean (cm) ↓ | 0.98 (0.9833) | 1.21 (1.2083) | +0.23cm (loftr 悪化, +23%) |
+  | ADD_AUC (%) ↑ | 78.10 (78.099) | 72.39 (72.389) | -5.71pt (loftr 悪化) |
+  | ADDS_AUC (%) ↑ | 90.18 (90.184) | 87.94 (87.939) | -2.24pt (loftr 悪化) |
+  | chamfer (cm) | 0.52 (0.518) | 0.525 | +0.005cm (実質同等, NeRF 由来でバックエンド非依存のため妥当) |
+
+  姿勢精度 (ADD/ADD-S/AUC) の 4 指標すべてで eloftr が明確に優位 (ADD_AUC で 5.7 ポイント, ADD 平均で 26% の差). 898 フレーム規模のサンプルでは誤差の範囲を超える有意差と判断し, 既定バックエンドを eloftr とする根拠を得た. これにより `notes/PERF_plan.md` の「既定採用の確定は精度比較を待つ」というゲート条件は満たされ, 改善項目2「マッチャーの opt 設定への切替」の前提 (eloftr 既定) も確定した. ただし本比較は SM1 単一動画・単一 seed によるものであり, 他動画での再現性は未確認. 生データ: loftr 姿勢出力 `data/bench_results/ho3d_ours_loftr/SM1/ob_in_cam/`, benchmark 出力 `data/bench_results/ho3d_log_loftr/`, 実行ログ `data/bench_results/loftr_bench_run.log`
 - [x] BundleSDF 側 ROS ラッパーノード実装 (`ros/bundlesdf_node/`, rgb+depth+mask 同期購読 → PoseStamped/TF 配信 + `sam3_segmenter` 込みの `bundlesdf.launch`. `docker/docker-compose.yml` + `.devcontainer/devcontainer.json` (compose をラップ) 追加, host networking + ROS_MASTER_URI/ROS_IP 設定. sam3_segmenter とは同一コンテナ (f8a0428 で jammy イメージに統合済み, 別コンテナではない). devcontainer 経由の起動と osx 側 roscore コンテナとの ROS 疎通はユーザー確認済み. `bundlesdf_node`/`sam3_segmenter` のトラッキングパイプライン自体 (rgb/depth/mask 同期→姿勢出力) の実機動作は未検証, 下記項目参照)
 - [x] リモート origin 変更 + feat/ros-one-online ブランチの push (2026-07-02, origin=barikata1984/BundleSDF)
 - [ ] SAM3 統合後イメージの再ビルドと `Sam3VideoModel` import 検証 (ユーザー指示で中断した分の再開)
