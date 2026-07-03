@@ -131,6 +131,5 @@ class LoftrRunner:
     corres = corres_tmp
 
     del last_data, image0, image1
-    torch.cuda.empty_cache()
 
     return corres

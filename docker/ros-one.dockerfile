@@ -112,7 +112,6 @@ RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
 ENV CUDA_HOME=/usr/local/cuda
 ENV OPENCV_IO_ENABLE_OPENEXR=1
 ENV PYTHONUNBUFFERED=1
-ENV OMP_NUM_THREADS=1
 
 RUN imageio_download_bin freeimage || true
 

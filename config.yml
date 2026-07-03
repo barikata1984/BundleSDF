@@ -99,4 +99,4 @@ dbscan_eps: 0.06
 dbscan_eps_min_samples: 1
 
 ####### bundlenerf
-sync_max_delay: 0   # 0 for strict sync
+sync_max_delay: 3   # allowed keyframe backlog before tracking blocks; 0 for strict sync
