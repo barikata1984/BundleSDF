@@ -36,3 +36,60 @@ feat/ros-one-online ブランチ (未コミット). インターフェース契�
 - PCL 1.12 対応 (`Utils.h/cpp`, `Frame.cpp`), rgbd include 削除, CMakeLists の sm_120 分岐,
   `build.sh` の python3.10 直書き除去.
 - 検証範囲: `py_compile` と grep による一貫性確認まで. コンテナビルド・実行時検証は未実施.
+
+## 2026-07-03
+
+目的: ミルクカートンデモ動画でのオンライン姿勢推定ベンチを"すぐ実行できる状態"まで準備する
+(実ベンチ実行はスコープ外). `bundlesdf:ros-one` イメージから永続コンテナ `bundlesdf_bench` を起動し,
+`bash build.sh` を実行して検証した.
+
+### データ・重み配置
+
+- ミルクデモ動画 (Google Drive `1akutk_Vay5zJRMr3hVzZ7s69GT4gxuWN`, gdown 経由, 1.28GB) を
+  `data/2022-11-18-15-10-24_milk/` に展開. rgb/depth/masks 各 1932 枚, cam_K.txt 確認. `data/` は
+  既に `.gitignore` 済み (追記不要).
+- `eloftr_outdoor.ckpt` (193MB) を `BundleTrack/EfficientLoFTR/weights/` に, `outdoor_ds.ckpt`
+  (46MB) を `BundleTrack/LoFTR/weights/` に配置. 両方 git 管理外であることを確認済み.
+- ホストの system python3 に pip が無かったため (`ensurepip` は Debian/Ubuntu で無効化), venv
+  経由で `gdown` を導入して回避した.
+
+### コンテナ内ビルド失敗 (3件, 再現性あり: build.sh を2回実行し同一の失敗を確認)
+
+1. **mycuda (`common` 拡張) の pip ビルドが CUDA バージョン不一致で失敗**:
+   `mycuda/pyproject.toml` の `[build-system] requires` に `torch>=2.6.0` と unpin で書かれている
+   ため, `pip install -e .` の build isolation が **PyPI から別の torch (CUDA 13.0 でコンパイル
+   されたもの) を取得**してしまい, コンテナに実際に入っている torch (2.8.0+cu129, nvcc 12.9) と
+   食い違う. `torch.utils.cpp_extension._check_cuda_version` が major version 不一致 (12 vs 13) で
+   `RuntimeError` を送出する. コンテナの site-packages 側の torch 自体は cuda 12.9 で一貫している
+   ことを個別に確認済みなので, 原因は isolation 環境側の torch 取得にある.
+2. **BundleTrack (my_cpp) の C++ コンパイル失敗, テンプレート実引数推論エラー**:
+   `Utils.h` の `convert3dOrganizedRGB` / `outlierRemovalRadius` / `outlierRemovalStatistic` /
+   `downsamplePointCloud` / `passFilterPointCloud` はいずれも仮引数型が
+   `typename pcl::PointCloud<PointT>::Ptr` のみで `PointT` を含む形になっており, これは C++ の
+   非推論コンテキストに該当する. `Frame.cpp`/`Bundler.cpp` の呼び出し側は明示的テンプレート実引数を
+   付けていないため, GCC 11.4 が `PointT` を推論できず "no matching function" / "template-id ...
+   does not match any template declaration" で失敗する.
+3. **BundleTrack (my_cpp) の C++ コンパイル失敗, `pcl::geometry` 未宣言**:
+   `FeatureManager.cpp` の 3 箇所 (744, 1569, 2000 行目) が `pcl::geometry::distance` を呼ぶが,
+   `pcl/common/geometry.h` を直接 include していない. PCL 1.12 では `pcl/common/distances.h`
+   (Utils.h が include 済み) からの transitive include が無くなっており, 未宣言エラーになる.
+
+いずれもソース修正はスコープ外のため実施していない (`notes/ISSUES.md` に追記).
+
+### GPU / ランタイム smoke 結果
+
+- `torch.cuda` : True, `NVIDIA GeForce RTX 5090`, 行列積 smoke OK.
+- `kaolin.__version__` : `0.18.0`, import OK.
+- `my_cpp` import: 失敗 (上記ビルド失敗のため `BundleTrack/build/my_cpp*.so` が生成されていない).
+- `LoftrRunner(backend=eloftr)` load: 失敗. `loftr_wrapper.py:48` の
+  `torch.load(ckpt)['state_dict']` が PyTorch 2.6+ のデフォルト `weights_only=True` に引っかかり,
+  `eloftr_outdoor.ckpt` に含まれる `pytorch_lightning.callbacks.model_checkpoint.ModelCheckpoint`
+  という許可リスト外の global が原因で `UnpicklingError` になる (4件目の新規発見の問題).
+
+### ベンチスクリプト
+
+`run_custom.py` は変更せず, `scripts/bench_milk.py` (フレーム毎 track() 時間計測),
+`scripts/compare_poses.py` (eloftr/loftr 間の姿勢軌跡相対比較), `scripts/bench_milk.sh` (両
+バックエンドを回してその 2 つを呼ぶオーケストレーション) を新規作成. 出力先は
+`data/bench_results/` (gitignore 対象). 構文チェックのみ実施 (`bash -n` / `py_compile`), 実行は
+上記ビルド失敗により現状不可.
