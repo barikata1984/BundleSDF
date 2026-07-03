@@ -14,7 +14,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 | 4 | `run_custom.py:84` | CONFIRMED | 未修正 | `use_segmenter=1` 経路のみマスク未リサイズ (reader は shorter_side=480 に縮小済み) | 解像度不一致のまま C++ へ → 前景マスク silent corruption / 範囲外アクセス. **ベンチは use_segmenter=0 で回避** |
 | 5 | `bundlesdf.py:688` | CONFIRMED | 未修正 | 空マスク時の `np.percentile(空配列)` ガードなし | 完全遮蔽・フレームアウトで実行全体がクラッシュ |
 | 6 | `loftr_wrapper.py:116` | PLAUSIBLE | 未修正 | マッチ 0 件で `mconf.min()/max()` (ログ行) が空配列 reduction | テクスチャ欠乏ペアで `predict()` ごと ValueError |
-| 7 | `bundlesdf.py:727` | CONFIRMED | 未修正 | NeRF 同期待ちが子プロセスの死活を未確認 | 子が CUDA OOM 死 → 親が無限待機. `sync_max_delay` 変更後も残存 |
+| 7 | `bundlesdf.py:727` | CONFIRMED | **修正済み** (bundlesdf.py:762-767, 本セッション) | NeRF 同期待ちが子プロセスの死活を未確認 | 子が CUDA OOM 死 → 親が無限待機. `sync_max_delay` 変更後も残存 |
 | 8 | `BundleTrack/src/Bundler.cpp:897` | CONFIRMED | 未修正 | 対応点ゼロで FAIL を立てるが return せず, ゼロ対応点のまま最適化続行し姿勢を無条件書き戻し (953-957) | global_corres 空のフレームで無意味な姿勢に上書き → 後続へ伝播 |
 | 9 | `docker/ros-one.dockerfile:38` | CONFIRMED | **修正済み** (cc36ede) | 手編集の `-DCUDA_ARC_BIN` typo + `BUILD_LIST` 削除 | cmake が未知 -D を無視 → 全アーキ×全モジュールのフルビルドに静かに退行. ※疑われた行継続破壊は実 docker build で再現せず (Docker はコメント行を結合前に除去) |
 | 10 | `ros/sam3_segmenter/scripts/sam3_segmenter_node.py:38` | CONFIRMED | 未修正 (別途 video_storage_device は Tier0 で対応) | `init_video_session` に dtype 未指定 (モデルは bf16) | セッションが fp32 のまま dtype 不一致 or bf16 効果無効 |
@@ -58,5 +58,5 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 
 1. **#3 confs_gpu リーク**: 場所特定済み, 修正は cudaFree 1 行追加. VRAM 単調増加の切り分けと同時に着手可能.
 2. **#2 zmq memcpy overread / #8 FAIL 非 return**: C++ の堅牢性. runNerf は現状 dead code (Python 側 run_nerf ワーカーを使用) なので #2 の実害は低いが, C++ runNerf を使う経路に戻すなら要修正.
-3. **#5 percentile 空配列 / #6 mconf 空 / #7 nerf 子死活**: Python 側, いずれも数行のガード追加. オンライン長時間運用の安定性に効く.
+3. **#5 percentile 空配列 / #6 mconf 空**: Python 側, いずれも数行のガード追加. オンライン長時間運用の安定性に効く. #7 (nerf 子死活) は本セッションで修正済み (bundlesdf.py:762-767).
 4. cleanup 系と圏外バグは perf 改善 (PERF_plan.md) と合わせて判断.
