@@ -106,7 +106,7 @@ colImage: 8UC3
 objDepth: 16UC1
 	*******************************************************************************************************/
 template<class PointT>
-void convert3dOrganizedRGB(cv::Mat &objDepth, cv::Mat &colImage, Eigen::Matrix3f &camIntrinsic, typename pcl::PointCloud<PointT>::Ptr objCloud)
+void convert3dOrganizedRGB(cv::Mat &objDepth, cv::Mat &colImage, Eigen::Matrix3f &camIntrinsic, pcl::shared_ptr<pcl::PointCloud<PointT>> objCloud)
 {
   const int imgWidth = objDepth.cols;
   const int imgHeight = objDepth.rows;
@@ -255,7 +255,7 @@ template bool isPclPointNormalValid(pcl::PointXYZRGBNormal pt);
 
 
 template<class PointT>
-void outlierRemovalRadius(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, float radius, int min_num)
+void outlierRemovalRadius(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, float radius, int min_num)
 {
   pcl::RadiusOutlierRemoval<PointT> outrem;
   outrem.setInputCloud(cloud_in);
@@ -267,7 +267,7 @@ template void outlierRemovalRadius(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr 
 
 
 template<class PointT>
-void outlierRemovalStatistic(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, float std_mul, int num)
+void outlierRemovalStatistic(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, float std_mul, int num)
 {
   pcl::StatisticalOutlierRemoval<PointT> sor;
   sor.setInputCloud(cloud_in);
@@ -278,7 +278,7 @@ void outlierRemovalStatistic(typename pcl::PointCloud<PointT>::Ptr cloud_in, typ
 template void outlierRemovalStatistic(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_in, pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud_out, float std_mul, int num);
 
 template<class PointT>
-void downsamplePointCloud(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, float vox_size)
+void downsamplePointCloud(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, float vox_size)
 {
   pcl::VoxelGrid<PointT> vox;
   vox.setInputCloud(cloud_in);
@@ -292,7 +292,7 @@ template void downsamplePointCloud<pcl::PointNormal>(pcl::PointCloud<pcl::PointN
 template void downsamplePointCloud<pcl::PointSurfel>(pcl::PointCloud<pcl::PointSurfel>::Ptr cloud_in, pcl::PointCloud<pcl::PointSurfel>::Ptr cloud_out, float vox_size);
 
 template<class PointT>
-void passFilterPointCloud(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, const std::string &axis, float min, float max)
+void passFilterPointCloud(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, const std::string &axis, float min, float max)
 {
   pcl::PassThrough<PointT> pass;
   pass.setInputCloud (cloud_in);

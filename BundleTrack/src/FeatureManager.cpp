@@ -12,6 +12,7 @@
 #include "FeatureManager.h"
 #include "cuda_ransac.h"
 #include <opencv2/cudafeatures2d.hpp>
+#include <pcl/common/geometry.h>
 
 using namespace std;
 

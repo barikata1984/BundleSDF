@@ -61,6 +61,7 @@
 
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
+#include <pcl/memory.h>
 #include <pcl/common/transforms.h>
 #include <pcl/common/pca.h>
 #include <pcl/common/distances.h>
@@ -211,7 +212,7 @@ int str2type(std::string s);
 float rotationGeodesicDistance(const Eigen::Matrix3f &R1, const Eigen::Matrix3f &R2);
 float rotationGeodesicDistanceIgnoreRotationAroundCamZ(const Eigen::Matrix3f &R1, const Eigen::Matrix3f &R2);
 template<class PointT>
-void convert3dOrganizedRGB(cv::Mat &objDepth, cv::Mat &colImage, Eigen::Matrix3f &camIntrinsic, typename pcl::PointCloud<PointT>::Ptr objCloud);
+void convert3dOrganizedRGB(cv::Mat &objDepth, cv::Mat &colImage, Eigen::Matrix3f &camIntrinsic, pcl::shared_ptr<pcl::PointCloud<PointT>> objCloud);
 template<class PointT>
 float pointToPlaneICP(typename pcl::PointCloud<PointT>::Ptr pclSegment,
                      typename pcl::PointCloud<PointT>::Ptr pclModel,
@@ -221,16 +222,16 @@ float pointToPointICP(pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr src,pcl::Poin
 
 
 template<class PointT>
-void outlierRemovalRadius(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, float radius, int min_num);
+void outlierRemovalRadius(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, float radius, int min_num);
 
 template<class PointT>
-void outlierRemovalStatistic(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, float std_mul, int num);
+void outlierRemovalStatistic(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, float std_mul, int num);
 
 template<class PointType>
-void downsamplePointCloud(typename pcl::PointCloud<PointType>::Ptr cloud_in, typename pcl::PointCloud<PointType>::Ptr cloud_out, float vox_size);
+void downsamplePointCloud(pcl::shared_ptr<pcl::PointCloud<PointType>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointType>> cloud_out, float vox_size);
 
 template<class PointT>
-void passFilterPointCloud(typename pcl::PointCloud<PointT>::Ptr cloud_in, typename pcl::PointCloud<PointT>::Ptr cloud_out, const std::string &axis, float min, float max);
+void passFilterPointCloud(pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_in, pcl::shared_ptr<pcl::PointCloud<PointT>> cloud_out, const std::string &axis, float min, float max);
 
 template <class PointT>
 void calNormalIntegralImage(typename pcl::PointCloud<PointT>::Ptr cloud, int method, float max_depth_change_factor, float smooth_size,bool depth_dependent_smooth);

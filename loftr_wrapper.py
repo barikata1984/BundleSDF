@@ -45,7 +45,8 @@ class LoftrRunner:
     cfg = deepcopy(full_default_cfg)
     self.matcher = LoFTR(config=cfg)
     ckpt = f'{code_dir}/BundleTrack/EfficientLoFTR/weights/eloftr_outdoor.ckpt'
-    self.matcher.load_state_dict(torch.load(ckpt)['state_dict'])
+    # weights_only=False: trusted local lightning ckpt (PyTorch 2.6+ defaults to True, which rejects it)
+    self.matcher.load_state_dict(torch.load(ckpt, weights_only=False)['state_dict'])
     self.matcher = reparameter(self.matcher)  # RepVGG deploy conversion, required by upstream
     self.matcher = self.matcher.eval().cuda()
 
@@ -54,7 +55,8 @@ class LoftrRunner:
     from BundleTrack.LoFTR.src.loftr import LoFTR, default_cfg
     default_cfg['match_coarse']['thr'] = 0.2
     self.matcher = LoFTR(config=default_cfg)
-    self.matcher.load_state_dict(torch.load(f'{code_dir}/BundleTrack/LoFTR/weights/outdoor_ds.ckpt')['state_dict'])
+    # weights_only=False: trusted local lightning ckpt (PyTorch 2.6+ defaults to True, which rejects it)
+    self.matcher.load_state_dict(torch.load(f'{code_dir}/BundleTrack/LoFTR/weights/outdoor_ds.ckpt', weights_only=False)['state_dict'])
     self.matcher = self.matcher.eval().cuda()
 
 

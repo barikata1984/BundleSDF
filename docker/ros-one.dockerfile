@@ -104,7 +104,7 @@ RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
     pip3 install --no-cache-dir \
       trimesh open3d kornia einops loguru transformations imageio scikit-image \
       wandb matplotlib tqdm ruamel.yaml sacred pymongo pyrender jupyterlab ninja \
-      "Cython>=0.29.37" yacs scipy scikit-learn opencv-python \
+      "Cython>=0.29.37" yacs scipy scikit-learn opencv-python pytorch_lightning \
       awscli-plugin-endpoint gputil xatlas pymeshlab rtree dearpygui \
       pytinyrenderer PyQt5 cython-npm chardet openpyxl && \
     pip3 install --no-cache-dir numpy==1.26.4

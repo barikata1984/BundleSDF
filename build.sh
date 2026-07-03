@@ -22,5 +22,5 @@ echo "PYTHONPATH: $PYTHONPATH"
 echo "Testing PyTorch import..."
 python3 -c "import torch; print('PyTorch version:', torch.__version__); print('CUDA available:', torch.cuda.is_available())"
 
-cd ${ROOT}/mycuda && rm -rf build *egg* && python3 -m pip install -e . 
+cd ${ROOT}/mycuda && rm -rf build *egg* && python3 -m pip install -e . --no-build-isolation
 cd ${ROOT}/BundleTrack && rm -rf build && mkdir build && cd build && cmake .. && make -j11
