@@ -309,3 +309,41 @@ bench-verify のフルベンチ実行前, frame 116 (初回 NeRF ラウンド) �
 `BUNDLESDF_PROFILE=1 BUNDLESDF_MATCHER=eloftr scripts/bench_milk.py --max_frames 30` を実行し (出力先 `data/out_milk_vramcheck/`, 既存のフルベンチ出力とは別ディレクトリ), `perf_main.csv` の末尾に `vram_alloc_mib`/`vram_reserved_mib` 列が実際に出力されることを確認した. 値は 1 フレーム目が alloc 314.3 / reserved 534.0 MiB, 定常が alloc 322.5 / reserved 954.0 MiB で, alloc はほぼ一定でリークの兆候はなく, reserved はキャッシュアロケータのウォームアップ後にプラトーに達する妥当な挙動だった. `perf_nerf.csv` もヘッダに両列が正しく含まれることを確認したが, 30 フレームではキーフレーム蓄積が 1 個のみで NeRF ラウンド自体が発火しておらず, データ行での実値確認はできていない (列スキーマの正しさのみ確認済み).
 
 `scripts/bench_milk.sh` の `start_gpu_mon`/`stop_gpu_mon` 機構についても, 12 秒の直接実行で `eloftr_gpu_mem.csv` が想定どおりの形式 (timestamp, memory.used, memory.total) で出力され, 停止後に nvidia-smi のゾンビプロセスが残留しないことを確認した. 既存の集計ツール `scripts/perf_stats.py` が新しい CSV を読み込んでもエラーを出さないことも確認した. 本節の作業はいずれも動作確認のみでコード変更はなく, コミットもしていない.
+
+## 2026-07-03 (続き): キーフレーム走査の上限設定 (batched GPU covisibility)
+
+`notes/PERF_plan.md` 改善項目2「キーフレーム走査の上限設定」(`Bundler.cpp:298,509`) に着手した. キーフレーム選択処理 (`select_kf`) は新フレームごとに既存の全キーフレームとの共視性 (covisibility) を計算する構造のため, キーフレーム数の増加に伴い O(N²) 的に劣化していた (実測: 序盤 2.6ms→終盤 24.9ms).
+
+### 検討した3案
+
+1. **走査に上限を設ける案 (却下)**: 直近 N 件のキーフレームだけを走査対象にする最も単純な案. ミルク動画は回転を伴う撮影であり, 古いキーフレームでも共視性が高くなり得る. 直近 N 件に絞ると BA (バンドル調整) に使うフレーム集合が変わり, 軌跡精度に影響するリスクがあると判断し却下した.
+2. **naive GPU 版 covisibility 復活案 (却下)**: `Bundler.cpp` にコメントアウトされていた単発 GPU 呼び出し (`computeCovisibilityCuda`) を, キーフレームごとに 1 回ずつ呼ぶ方式. 400 フレームのスモークで実測したところ, キーフレーム 1 件あたりのメモリ確保・解放・同期のオーバーヘッドが支配的になり, CPU 版 (7.75ms) より遅い 19.2ms という結果になり却下した. upstream 作者がコメントアウトしていた理由もこれと推測される.
+3. **batched GPU 版 covisibility (採用)**: 共視性計算をキーフレームごとに個別に呼ぶのではなく, 全キーフレーム分をまとめて 1 回の GPU カーネル起動 (grid.z=n_kf) で計算する方式. 計算式自体 (法線と eye ベクトルの内積, 閾値判定) は CPU 版・naive GPU 版と同一であり, 呼び出し回数だけを 1 フレームあたり 1 回に集約してオーバーヘッドを償却した.
+
+### 実装
+
+3 ファイル, +84 行程度の変更で, いずれも未コミットである.
+
+- `BundleTrack/src/cuda/CUDAImageUtil.cu`: `computeCovisibilityBatchKernel` (CUDA カーネル) と `computeCovisibilityBatch` (host 関数) を新規追加した. カーネル完了後に `cudaMemcpy` (DeviceToHost, 非 async) で結果を回収しており, これが暗黙的な同期点になっている.
+- `BundleTrack/src/cuda/CUDAImageUtil.h`: 上記の宣言を追加した.
+- `BundleTrack/src/Bundler.cpp:506-517`: `selectKeyFramesForBA()` 内の `normal_orientation_nearest` 分岐で, OMP 並列 CPU ループを, pose 配列構築 + 1 回の batched GPU 呼び出しに置換した.
+
+ROI の扱いについて, CPU 版・naive GPU 版は `fA->_roi` で走査範囲を絞っていたが, batched 版は ROI 引数を受け取らず画像全体を走査する. ただし `bundlesdf.py:547` で `roi = [0,W-1,0,H-1]` と常に ROI が画像全体に設定されているため, 実質的な計算範囲は変わらないことをコード確認により検証した. stride (2) と計算式も CPU 版と一致することを確認した. `bash build.sh` でリビルド成功, `my_cpp` import も確認済みである.
+
+### 検証結果
+
+フル 1932 フレーム, `data/out_milk_eloftr_kfcap/` (kfcap) を baseline `data/out_milk_eloftr_async/` (async) と比較した. 軌跡差は `scratchpad/kfcap_vs_async.csv` の生 CSV から再計算し裏取りした.
+
+軌跡整合ゲートは合格した. 回転差 median 0.587° (基準 1.33° 未満), 並進差 median 0.064cm (基準 0.16cm 未満). p90 は回転 3.32°/並進 0.55cm, max は回転 31.9°/並進 2.34cm だった. rot>5° の 168 フレームは大半 (162 件) が idx 1576-1879 に集中しており, これは `notes/PERF_plan.md` 記載の既知の終盤区間 (低テクスチャ・対称形状のミルクジャグ, モーションブラー起因) であり, eloftr-vs-loftr 対照でも同区間にスパイクが出現する既知の現象であって, 本変更起因ではないと判断した.
+
+select_kf は劇的に改善した. 終盤 200 フレームの median は 23.9ms→0.578ms (約41倍), セッション合計は 32.48s→1.27s (-31.2s) だった. 区間ごとの推移 (0.012→0.567→0.644→0.578ms, キーフレーム 0→262 件) はほぼ横ばいであり, O(N²) 依存が解消されキーフレーム数に依存しなくなったことを示す.
+
+フレーム総時間の median は 139.3ms→129.3ms (-10ms), 終盤 200 フレームでは 155.7ms→138.5ms (-17ms) であり, 定常計算時間は確実に短縮した. 一方で壁時計は不変だった (kfcap 501s, total_ms 合計 469.9s, vs async 468.3s). これは NeRF 同期待ちが壁時計の 52% を占め律速しているためであり (`notes/PERF_plan.md` の既存分析と整合), select_kf 単体の高速化が壁時計に反映されない.
+
+VRAM はピーク 27.2GB で baseline (27.7GB) と同等だった. この変更は VRAM 単調増加の主因 (キーフレーム蓄積) には無関係であり, 影響なしという予想どおりの結果である.
+
+また, `computeCovisibilityBatch` 内の `cudaMemcpy` (DeviceToHost) がカーネル完了を待つ暗黙の同期点になっているため, select_kf スパンの計測値 (0.578ms 等) は GPU 計算完了込みの実時間であることをコード確認により裏取りした (GPU 非同期実行による計測誤差の懸念はない).
+
+### 生データ保存場所
+
+フル出力 `data/out_milk_eloftr_kfcap/` (poses, perf_main.csv 等), `data/bench_results/kfcap_frame_times.csv`, `data/bench_results/kfcap_gpu_mem.csv`, 軌跡差 per-frame `scratchpad/kfcap_vs_async.csv`. baseline `data/out_milk_eloftr_async/` は読み取りのみで未変更である.

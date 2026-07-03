@@ -105,7 +105,16 @@ NeRF が休みなく回っている現状では, ラウンド時間の短縮が�
 ## 改善項目 2: 毎フレームの処理を削る (定常 median 163.5ms)
 
 - [x] **結果保存の非同期化** (実装済み・ベンチ確認済み, 2026-07-03): `bundlesdf.py`. `saveNewframeResult()` は pybind 側で既に `py::call_guard<py::gil_scoped_release>()` 済み (`BundleTrack/pybind_interface/pybind_api.cpp:227`) だが, 単一スレッドで同期呼び出ししていたため待ちを解消できていなかった. C++ 定義 (`Bundler.cpp:964-1115`) を確認し, ディスク書き込みのみで `_newframe`/`_keyframes`/`_frames` 等の状態を変更しないことを確認 (バックグラウンド化の安全条件を満たす). 単一ワーカースレッド + `queue.Queue` で書き出しをオフロードし, フレーム順序保証のため次フレームの `self.bundler._newframe` 再代入 (`process_new_frame` 冒頭) の直前で `queue.join()` して前フレームの保存完了を待つようにした. `on_finish()` でも最終フレームの保存を待ってからスレッドを終了する. **結果**: async フルベンチ (`data/out_milk_eloftr_async/`, warm-start 適用済み baseline `out_milk_eloftr_item1` 比) で `save_result` median 21.99ms→0.01ms, フレーム total median 161.7ms→139.3ms (-22.4ms), 壁時計 501.4s→468.3s (-6.6%) を確認 (2026-07-03).
-- [ ] **キーフレーム走査の上限設定** (旧 Tier 3-1, 未着手): `Bundler.cpp:298,509`. キーフレーム全走査に上限がなく, フレーム数に対して O(N²) 化する. キーフレーム選択が 2.6→24.9ms まで伸びた原因. 走査に上限を設けるか, コメントアウトされている GPU 版 covisibility を復活させる. 終盤で −25ms, 長時間運用ほど効く. 確認は軌跡整合.
+- [x] **キーフレーム走査の上限設定** (旧 Tier 3-1, 実装済み・ベンチ確認済み, 2026-07-03): `Bundler.cpp:298,509`. `selectKeyFramesForBA()` の `normal_orientation_nearest` 分岐 (共視性計算) が新フレームごとに既存の全キーフレームを走査する構造のため, キーフレーム数に対して O(N²) 化していた (序盤 2.6ms→終盤 24.9ms).
+  - **検討した 3 案**:
+    1. 走査に上限を設ける案 (却下): ミルク動画は回転を伴う撮影で古いキーフレームでも共視性が高くなり得るため, 直近 N 件に絞ると BA に使うフレーム集合が変わり軌跡精度に影響するリスクがあると判断した.
+    2. コメントアウトされていた naive GPU 版 covisibility (`computeCovisibilityCuda`) の復活案 (却下): キーフレームごとに単発 GPU 呼び出しを行う方式. 400 フレームのスモークで実測したところ, キーフレーム 1 件あたりのメモリ確保・解放・同期のオーバーヘッドが支配的になり, CPU 版 (7.75ms) より遅い 19.2ms という結果になった. upstream 作者がコメントアウトしていた理由もこれと推測される.
+    3. batched GPU 版 covisibility (採用): 共視性計算をキーフレームごとに個別に呼ぶのではなく, 全キーフレーム分をまとめて 1 回の GPU カーネル起動 (grid.z=n_kf) で計算する方式. 計算式自体 (法線と eye ベクトルの内積, 閾値判定) は CPU 版・naive GPU 版と同一で, 呼び出し回数のみを 1 フレームあたり 1 回に集約してオーバーヘッドを償却した.
+  - **実装**: `CUDAImageUtil.cu` に `computeCovisibilityBatchKernel` (CUDA カーネル) と `computeCovisibilityBatch` (host 関数) を新規追加, `CUDAImageUtil.h` に宣言を追加. `Bundler.cpp:506-517` の `normal_orientation_nearest` 分岐を, OMP 並列 CPU ループから pose 配列構築 + 1 回の batched GPU 呼び出しに置換した. `computeCovisibilityBatch` はカーネル完了後に `cudaMemcpy` (DeviceToHost, 非 async) で結果を回収しており, これが暗黙的な同期点になっている.
+  - **ROI について**: CPU 版・naive GPU 版は `fA->_roi` で走査範囲を絞っていたが, batched 版は ROI 引数を受け取らず画像全体を走査する. ただし `bundlesdf.py:547` で `roi = [0,W-1,0,H-1]` と常にROIが画像全体に設定されているため, 実質的な計算範囲は変わらないことを確認済み. stride (2) と計算式が CPU 版と一致することも確認済み.
+  - **結果** (フル 1932 フレーム, `data/out_milk_eloftr_kfcap/` vs baseline `data/out_milk_eloftr_async/`): 軌跡整合ゲート合格 (回転差 median 0.587° < 基準 1.33°, 並進差 median 0.064cm < 基準 0.16cm. p90 は回転 3.32°/並進 0.55cm, max 回転 31.9°/並進 2.34cm). select_kf は終盤 200 フレーム median 23.9ms→0.578ms (約 41 倍), セッション合計 32.48s→1.27s (-31.2s) に改善し, 区間ごとの推移 (0.012→0.567→0.644→0.578ms) がほぼ横ばいとなり O(N²) 依存が解消されキーフレーム数に依存しなくなったことを確認した. フレーム total median は 139.3ms→129.3ms (-10ms), 終盤 200 フレームでは 155.7ms→138.5ms (-17ms). 壁時計は不変 (kfcap 501s vs async 468.3s) で, これは NeRF 同期待ちが壁時計の 52% を占め律速しているためであり (改善項目1 参照), select_kf 単体の高速化は壁時計に反映されない. VRAM ピークは 27.2GB で baseline (27.7GB) と同等 (この変更は VRAM 単調増加の主因であるキーフレーム蓄積には無関係).
+  - **回転差バーストについて**: rot>5° の 168 フレームは大半 (162 件) が idx 1576-1879 に集中しており, これは既知の終盤区間 (低テクスチャ・対称形状のミルクジャグ, モーションブラー起因. eloftr-vs-loftr 対照でも同区間にスパイクが出現する) であり本変更起因ではない.
+  - **未コミット**. 生データ: フル出力 `data/out_milk_eloftr_kfcap/`, `data/bench_results/kfcap_frame_times.csv`, `data/bench_results/kfcap_gpu_mem.csv`, 軌跡差 per-frame `scratchpad/kfcap_vs_async.csv`.
 - [ ] **マッチャーの opt 設定への切替** (未着手): eloftr は精度優先の full 設定 + autocast で動いている. 論文の最速値を出している opt 設定 (skip_softmax + fp16matmul) に切り替えると, マッチャー推論 61.4ms に大幅減の余地がある. 確認は軌跡整合から始め, 採用確定は絶対精度まで.
 - [x] **転送順の修正** (旧 Tier 2-1, 実装済み・ベンチ確認済み, 2026-07-03): `loftr_wrapper.py:80-81` で `.float()` が `.cuda()` より前にあった (`.permute(0,3,1,2).float().cuda()`) のを `.permute(0,3,1,2).cuda().float()` に変更し, 転送後に float 化するよう修正. **結果**: async フルベンチで `loftr_predict` median 61.95ms→58.98ms (-3.0ms), 見込み (「数 ms」) と一致.
 - [ ] **マッチャー呼び出しの統合** (未着手): 参照フレーム用と局所ペア用でマッチャー推論を 2 回呼んでいる. 1 バッチに統合すれば起動オーバーヘッド分だけ縮む (小). 確認は軌跡整合.
@@ -138,7 +147,7 @@ NeRF が休みなく回っている現状では, ラウンド時間の短縮が�
 2. [x] ランナー再構築の廃止 — フルスケールで効果薄と判明 (改善項目1 参照)
    [ ] ウォームアップの排除 — 改善項目3 の MPS 導入待ち
 3. [x] VRAM 増加の切り分け (`confs_gpu` の 1 行修正. キーフレーム走査上限の前提データ取り) — cudaFree 漏れの 1 行修正実装済み (改善項目3 参照). リビルド・import 確認済み. async フルベンチでの再ベンチにより, VRAM 単調増加の主因はキーフレーム蓄積と暫定判明 (簡易計測によるもの, 正式な VRAM ロギング実装での再検証が次回課題)
-4. [ ] キーフレーム走査の上限設定 (経時劣化の止血)
+4. [x] キーフレーム走査の上限設定 (経時劣化の止血) — batched GPU 版 covisibility として実装済み・ベンチ確認済み (改善項目2 参照). select_kf 終盤 median 23.9ms→0.578ms (約41倍), フレーム total 終盤 median -17ms. 軌跡整合ゲート合格. 壁時計は NeRF 律速のため不変
 5. [x] NeRF 子プロセス死活の修正 (待ちループのバグ修正)
    [ ] 同期ポリシー自体の見直し (待ちの構造的な解消)
 6. [ ] マッチャーの opt 設定への切替
