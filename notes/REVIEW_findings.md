@@ -13,7 +13,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 | 3 | `BundleTrack/src/FeatureManager.cpp:1661` | CONFIRMED | **修正済み** (e894df9) | `confs_gpu` だけ cudaFree 漏れ (解放ループ 1703-1711 に含まれず) | 長時間トラッキングで GPU メモリリーク → CUDA OOM. VRAM 単調増加の一因の可能性. リビルド・`my_cpp` import 確認済み, 再ベンチによる VRAM 増加分の切り分けは未実施 |
 | 4 | `run_custom.py:84` | CONFIRMED | 未修正 | `use_segmenter=1` 経路のみマスク未リサイズ (reader は shorter_side=480 に縮小済み) | 解像度不一致のまま C++ へ → 前景マスク silent corruption / 範囲外アクセス. **ベンチは use_segmenter=0 で回避** |
 | 5 | `bundlesdf.py:757-762` | CONFIRMED | **修正済み** (本セッション) | 空マスク時の `np.percentile(空配列)` ガードなし | 完全遮蔽・フレームアウトで実行全体がクラッシュ |
-| 6 | `loftr_wrapper.py:116` | PLAUSIBLE | 未修正 | マッチ 0 件で `mconf.min()/max()` (ログ行) が空配列 reduction | テクスチャ欠乏ペアで `predict()` ごと ValueError |
+| 6 | `loftr_wrapper.py:116` | PLAUSIBLE | **修正済み** (本セッション) | マッチ 0 件で `mconf.min()/max()` (ログ行) が空配列 reduction | テクスチャ欠乏ペアで `predict()` ごと ValueError |
 | 7 | `bundlesdf.py:727` | CONFIRMED | **修正済み** (bundlesdf.py:762-767, 本セッション) | NeRF 同期待ちが子プロセスの死活を未確認 | 子が CUDA OOM 死 → 親が無限待機. `sync_max_delay` 変更後も残存 |
 | 8 | `BundleTrack/src/Bundler.cpp:901` | CONFIRMED | **修正済み** (本セッション) | 対応点ゼロで FAIL を立てるが return せず, ゼロ対応点のまま最適化続行し姿勢を無条件書き戻し (953-957) | global_corres 空のフレームで無意味な姿勢に上書き → 後続へ伝播 |
 | 9 | `docker/ros-one.dockerfile:38` | CONFIRMED | **修正済み** (cc36ede) | 手編集の `-DCUDA_ARC_BIN` typo + `BUILD_LIST` 削除 | cmake が未知 -D を無視 → 全アーキ×全モジュールのフルビルドに静かに退行. ※疑われた行継続破壊は実 docker build で再現せず (Docker はコメント行を結合前に除去) |
@@ -37,7 +37,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 | `tool.py:51` | PLAUSIBLE | precomputed 経路 + mask None で `mask_file` 未定義 NameError |
 | `build.sh:4` | PLAUSIBLE | torch パス解決失敗時のエラーハンドリングなし (空文字で続行) |
 | `sam3_segmenter_node.py:49` | CONFIRMED | `buff_size=2^24` が 4K rgb8 (約 25MB) より小さい |
-| `loftr_wrapper.py:80` | PLAUSIBLE | permute 後に `shape[-1]==3` を見るグレースケール判定 (USE_GRAY:true で休眠) |
+| `loftr_wrapper.py:83` | PLAUSIBLE | **修正済み** (本セッション, `shape[-1]==3`→`shape[1]==3` に修正). permute 後に `shape[-1]==3` を見ておりチャンネル軸ではなく幅を参照していたグレースケール判定. 実運用 (`USE_GRAY:true`) では C++ 側で事前にグレースケール変換済みのため発火しないが, 3ch RGB を直接渡す経路では `RuntimeError` を起こすことを実地で確認 |
 | cleanup 系 4 件 | CONFIRMED/PLAUSIBLE | 二重 `no_grad` (loftr_wrapper, **修正済み** 2026-07-03) / `kpts_to_ray_ids` の重複 GPU→CPU 転送 (未修正) / `run_nerf`/`run_global_nerf` の約 150 行重複 (未修正) / 死んだ代入 `bundlesdf.py:590` (未修正) |
 
 ## 検証で棄却された候補 (REFUTED)
@@ -59,5 +59,5 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 1. **#3 confs_gpu リーク**: 修正済み (e894df9, `cudaFree` 1 行追加, リビルド・import 確認済み). VRAM 単調増加の残存分がキーフレーム蓄積由来かどうかの再ベンチによる切り分けは未実施.
 2. **#8 FAIL 非 return**: 修正済み (本セッション, `Bundler.cpp:901` に `return;` を追加. 呼び出し元は `_status==FAIL` をチェックして forgetFrame+return するため後続に悪影響なし. `bash build.sh` でリビルドし警告のみでエラーなし, 80 フレームのスモークで正常系が壊れていないことを確認).
 3. **#2 zmq memcpy overread**: C++ の堅牢性. runNerf は現状 dead code (Python 側 run_nerf ワーカーを使用) なので実害は低いが, C++ runNerf を使う経路に戻すなら要修正.
-4. **#5 percentile 空配列**: 修正済み (本セッション, `bundlesdf.py:757-762` に `if valid.any():` ガードを追加し, 有効画素がないときは閾値計算・denoise をスキップしてログ出力のみとした). **#6 mconf 空**は未修正で残る. #7 (nerf 子死活) は前セッションで修正済み (bundlesdf.py:762-767).
+4. **#5 percentile 空配列**: 修正済み (本セッション, `bundlesdf.py:757-762` に `if valid.any():` ガードを追加し, 有効画素がないときは閾値計算・denoise をスキップしてログ出力のみとした). **#6 mconf 空**も修正済み (本セッション, `total_n_matches` によるガードでマッチ0件時のログ行をスキップ. 詳細は下記「2026-07-03 (続き): #6 mconf 空配列の修正」参照). #7 (nerf 子死活) は前セッションで修正済み (bundlesdf.py:762-767).
 5. cleanup 系と圏外バグは perf 改善 (PERF_plan.md) と合わせて判断.

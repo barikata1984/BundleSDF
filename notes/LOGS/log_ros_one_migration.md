@@ -347,3 +347,127 @@ VRAM はピーク 27.2GB で baseline (27.7GB) と同等だった. この変更�
 ### 生データ保存場所
 
 フル出力 `data/out_milk_eloftr_kfcap/` (poses, perf_main.csv 等), `data/bench_results/kfcap_frame_times.csv`, `data/bench_results/kfcap_gpu_mem.csv`, 軌跡差 per-frame `scratchpad/kfcap_vs_async.csv`. baseline `data/out_milk_eloftr_async/` は読み取りのみで未変更である.
+
+## 2026-07-03 (続き): 同期ポリシー見直し (sync_max_delay 拡大) の検証と不採用判断
+
+`notes/PERF_plan.md` 改善項目1「同期ポリシーの見直し」(`config.yml:102` の `sync_max_delay` 拡大, または待ちの非ブロック化) に着手した. 待ちの機構は `bundlesdf.py:761-772` にあり, キーフレームの先行数が `sync_max_delay` 以上でかつ NeRF ラウンド実行中はスピン待ちする. 現行既定は 3 (kfcap baseline).
+
+### 検証方法
+
+`sync_max_delay` を 3 (baseline) から 6, 10 に拡大し, ミルクベンチ (1932 フレーム) と HO3D SM1 (898 フレーム, n=895, 必須ゲート) の両方で検証した. `config.yml` は検証後に 3 へ戻し, git diff がない状態に復元済みである.
+
+### 速度側の結果 (ミルクベンチ, eloftr)
+
+| delay | nerf_wait | 壁時計 | fps |
+|---|---|---|---|
+| 3 (kfcap, baseline) | 217.7s (46.3%) | 469.9s | 4.11 |
+| 6 | 65.8s (20.5%) | 321.2s | 6.02 |
+| 10 | 17.6s (6.4%) | 275.1s | 7.02 |
+
+フレーム total median は delay によらずほぼ一定 (~129-132ms) であり, トラッキング自体の計算内容は変わらず NeRF 待ちの頻度だけが変わることを確認した. 見せかけ高速化でないことも `scripts/check_repeated_poses.py` で確認済みである (bit-identical consecutive poses は sync6/sync10 とも 0 件, フレーム間差は async/kfcap と同水準).
+
+### 精度側の結果 (1): ミルク軌跡整合 (kfcap 基準との相対差)
+
+| delay | 回転差 median | 回転 p90 | 回転 max | 並進差 median |
+|---|---|---|---|---|
+| 軌跡整合ゲート基準 | 1.33°未満で合格 | — | — | 0.16cm未満で合格 |
+| 6 | 2.56° | 6.79° | 14.76° | 0.275cm |
+| 10 | 3.32° | 11.37° | 32.45° | 0.302cm |
+
+いずれも基準超過で不合格だった.
+
+### 精度側の結果 (2): HO3D SM1 絶対精度 (必須ゲート, n=895)
+
+| delay | ADD(cm) | ADD-S(cm) | ADD_AUC(%) | ADDS_AUC(%) | chamfer(cm) |
+|---|---|---|---|---|---|
+| 3 (既定) | 2.20 | 0.98 | 78.10 | 90.18 | 0.52 |
+| 6 | 2.63 | 1.16 | 73.78 | 88.38 | 0.52 |
+| 10 | 2.74 | 1.18 | 72.67 | 88.20 | 0.51 |
+
+delay 増加に伴い ADD/ADD-S が単調に悪化した (delay 3→6 で ADD +0.43cm/ADD_AUC -4.32pt, 3→10 で ADD +0.54cm/ADD_AUC -5.43pt). これは GT に対する絶対精度の劣化であり, 機構 (NeRF 姿勢補正の反映遅延) も説明できる. chamfer (形状復元) はほぼ不変であり, 姿勢劣化はメッシュ形状には及ばない.
+
+### 判断: 不採用
+
+sync_max_delay 拡大の既定採用は不採用と判断した. 速度向上は大きい (fps 4.11→7.02) が, HO3D 絶対精度が明確に悪化するため, warm-start (`notes/PERF_plan.md` 改善項目1の項目7, 軌跡整合ゲート不合格でも絶対精度未確認のまま許容された前例) とは異なり, 既定確定の基準 (絶対精度に明確な劣化がないこと) を満たさない. 速度優先でユーザーが許容する場合でも delay=6 を上限とすべきであり, delay=10 は収穫逓減 (精度劣化幅の割に速度向上が小さい) と判断した.
+
+待ちの非ブロック化 (もう一方のアプローチ) は未実装のままである. 精度劣化の根本原因 (NeRF 補正の反映遅延) は非ブロック化しても残るため, 単純な非ブロック化では同じ問題を引き継ぐ可能性が高いと判断し, 次回以降の検討課題とした (改善項目3 の MPS 導入で NeRF スループット自体を上げる方が本質的な解決に近い).
+
+生データ: `data/out_milk_eloftr_sync{6,10}/`, `data/bench_results/sync{6,10}_*`, `scratchpad/kfcap_vs_sync{6,10}.csv`, `data/bench_results/ho3d_ours_sync{6,10}/`, `data/bench_results/ho3d_log_sync{6,10}/`. 既存 baseline (kfcap, ho3d_ours, ho3d_log) は上書きしていない. 未コミット (`config.yml` は検証後に diff なしへ復元済みのため実質コミット不要).
+
+### ユーザーとの議論: delay-精度トレードオフをどう決めるか
+
+上記の検証結果を受けて, ユーザーと「sync_max_delay と精度のトレードオフをどう決めるか」を議論した.
+
+このパイプラインの最終目的はロボット制御のための物体姿勢情報の提供であり, 精度の最大化自体が目的ではない. 「制御が成立する範囲の精度」であれば速度を優先すべきだが, その許容誤差の範囲は机上では決められず, 実機での検証でしか判断できない (ユーザー自身の言葉: 「制御が成立する範囲は実機で検証するしかない」). したがって, 実機検証で許容誤差の仕様が決まるまでの間に, delay と精度のトレードオフデータを先に蓄積しておき, 実機検証後に「この許容誤差ならこの delay」を逆引きできるようにしておく, という方針になった.
+
+この方針転換の理由は, 机上の絶対精度ゲート (HO3D の ADD/ADD-S) だけでは delay の採否を一意に決められないと判明したためである. sync_max_delay 拡大は warm-start とは異なり絶対精度の明確な劣化を伴うため単純に「不採用」と判断できたが, 「では何 delay まで許容できるのか」は制御系の要求仕様 (許容誤差) 次第であり, 現時点ではその仕様自体が未定である. 機上のベンチだけで最適点を決めようとすると, 精度最大化 (delay=3 に固定) と速度最大化 (delay=10 を採用) のどちらの立場も正当化できてしまい, 判断が宙吊りになる. 実機検証を待たずに作業を止めるのではなく, 先にトレードオフデータを蓄積しておくことで, 実機検証が完了した時点で仕様に合う delay を即座に選べるようにする, という判断である.
+
+### 新規タスク: delay-精度トレードオフの体系的スイープ
+
+HO3D の評価セットは 13 動画あり, 内訳は次のとおりである (SM1 で使った 898 フレームより他は大幅に長い).
+
+- AP10, AP11, AP12, AP13, AP14 (各 1616 フレーム)
+- MPM10, MPM11, MPM12, MPM13, MPM14 (各 1618 フレーム)
+- SB11, SB13 (各 1680 フレーム)
+- SM1 (898 フレーム, 検証済み)
+
+13 動画合計で約 20,428 フレームである. 全動画×細かい delay 刻みを一度に網羅すると計算コストが大きい (半日〜1日規模) ため, 段階的に進める方針で合意した.
+
+1. **第1段階**: SM1 に加え, 物体・視点条件が異なる動画を 1〜2 本 (例: AP系 1本, MPM系 1本) 選び, delay を細かく振る (3, 4, 5, 6, 7, 8, 10, 12, 15 程度). 目的は「delay-誤差カーブの形状」(線形に劣化するのか, どこかで急に破綻するのか) を把握することである.
+2. **第2段階**: 第1段階で見えた「精度が崩れ始める境界 delay」付近を中心に, 残りの動画にも広げて一般化性を確認する.
+3. 深夜などロボット実機を使わない時間帯にバックグラウンドで回す運用を想定する.
+
+まだ決まっていないこと (次回セッションで詰める): 第1段階で使う代表動画 (AP系/MPM系/SB系のどれを選ぶか), 実行方法 (このセッション内でバックグラウンド実行するか, `/schedule` 等で夜間に自動実行するか), 収集したデータの整理・可視化方法 (delay-誤差カーブとして後から参照しやすい形にする).
+
+このタスクは `notes/TODO.md` の未完了項目として独立に追加した.
+
+## 2026-07-03 (続き): notes の誤り訂正 (SAM3 統合イメージのビルド・import 確認は完了済みだった)
+
+`notes/ISSUES.md`/`notes/TODO.md` には「SAM3 統合後イメージの再ビルドが未検証」「イメージの再ビルドと `Sam3VideoModel` の import 確認はユーザー指示で中断しており未実施」という記述が残っていたが, ユーザーの指摘を受けて実際のコンテナ環境を検証したところ, これは事実誤認だったと判明した.
+
+検証したのは以下の項目である.
+
+- `python3 -c "import transformers; print(transformers.__version__)"` → `5.12.1` (ISSUES.md 記載のバージョンと完全一致)
+- `huggingface_hub`, `accelerate` もインストール済み
+- OS: `Ubuntu 22.04 jammy` (統合コンテナの記述通り)
+- `python3 -c "from transformers import Sam3VideoModel"` → 成功 (`<class 'transformers.models.sam3_video.modeling_sam3_video.Sam3VideoModel'>`)
+
+つまり `ros-one.dockerfile` の統合イメージビルドと `Sam3VideoModel` の import 確認は, 実際にはすでに完了していた. ISSUES.md/TODO.md の「未実施」という記述が古いまま更新されずに残っていたことが原因である.
+
+一方, 別件として SAM3 の重み (checkpoint/safetensors) はコンテナ内に見当たらず, 未配置のままであることも確認した (`find / -iname "*sam3*checkpoint*"` 等で該当なし). これは TODO.md の「SAM3 重み配置 (HF gated リポジトリ要承認申請)」が未完了のままであることと一致しており, こちらは引き続き別のブロッカーとして残る.
+
+この訂正を受けて, `notes/TODO.md` の該当項目を `[x]` に変更し, `notes/ISSUES.md` の重複するエントリ (ビルド・import 確認の未検証扱い) を削除して TODO.md 側に一本化した.
+
+## 2026-07-03 (続き): #6 mconf 空配列の修正
+
+`notes/REVIEW_findings.md` #6 (`loftr_wrapper.py:118`, PLAUSIBLE 判定) を修正した. マッチ 0 件 (テクスチャ欠乏ペア) のとき `logging.info(f"mconf, {mconf.min()} {mconf.max()}")` の `mconf` が空配列になり, `ValueError: zero-size array to reduction operation minimum which has no identity` でクラッシュしていた.
+
+修正は, 既存変数 `total_n_matches` (113 行目で計算済み) を使い, マッチが 0 件のときはこのログ行をスキップするガードを追加する形で行った.
+
+```python
+if total_n_matches > 0:
+  logging.info(f"mconf, {mconf.min()} {mconf.max()}")
+else:
+  logging.info("mconf: no matches")
+```
+
+検証は, 無地 (テクスチャなし) のグレースケール画像ペア (480x640, 1 チャンネル) を `LoftrRunner.predict()` に渡すスモークテストで行い, マッチ 0 件でも `ValueError` を起こさず `corres[0].shape=(0,5)` を正常に返すことを確認した. また旧コードが確かに `ValueError` を起こすことも, `np.array([]).min()` により別途確認済みである. Python のみの変更で再ビルドは不要であり, 未コミットである.
+
+副次的な発見 (修正不要, 記録のみ): テスト中に別の既存バグ (`loftr_wrapper.py:83` の `if image0.shape[-1]==3:` という grayscale 判定が, `.permute(0,3,1,2)` 後の呼び出しのため実質的に意味をなさない, `notes/REVIEW_findings.md` の「圏外の生存候補」に既に PLAUSIBLE として記載済みのバグ) を実地で踏んだ. 3 チャンネル RGB 画像を渡すと `RuntimeError: expected input to have 1 channels, but got 3 channels` になることを確認した. これは今回のスコープ外のため修正はしていないが, 実際に発火することが実証された点は記録に値する.
+
+## 2026-07-03 (続き): loftr_wrapper.py:83 グレースケール判定バグの修正
+
+上記の副次的発見を受け, `loftr_wrapper.py:83` の grayscale 判定バグも別途修正した.
+
+原因は, `if image0.shape[-1]==3:` という入力 RGB 画像をグレースケールに変換すべきかどうかを判定するコードが, 直前の `.permute(0,3,1,2)` (81-82 行目, NHWC→NCHW 変換) の後に評価されていた点にある. これにより `shape[-1]` はチャンネル数ではなく幅 (W) を指しており, 実質的に意味をなさない判定になっていた.
+
+調査の結果, 実運用 (`BundleTrack/config_ho3d.yml:10` の `USE_GRAY: true`) では C++ 側の `processImagePair` が Python 側に渡す前に既にグレースケール変換を行っているため, Python 側はこの判定に到達する時点で既に 1 チャンネル画像を受け取っており, このバグは実運用パスでは発火しない (常に False になるだけの休眠コード) ことを確認した. 一方, 3 チャンネル RGB 画像を直接渡すテストでは実際に `RuntimeError: expected input to have 1 channels, but got 3 channels` を引き起こすことは, 上記の mconf 修正のスモークテスト中に偶然踏んで確認済みである.
+
+修正は `image0.shape[-1]==3` を `image0.shape[1]==3` (permute 後の NCHW 形式ではチャンネル軸は axis=1) に変更する 1 行で行った. 再ビルドは不要である.
+
+検証は次の 2 点で行った.
+
+1. 3 チャンネル RGB のテクスチャなし画像ペアを渡すテスト: 修正前は `RuntimeError`, 修正後は正しく grayscale 変換されエラーなく完走した (`corres[0].shape=(0,5)`, マッチ 0 件も正常処理).
+2. 既存の実運用パス (1 チャンネルグレースケール入力, `USE_GRAY:true` 相当) が引き続き正常動作することも確認した (乱数画像で 4256 マッチを正しく検出, 挙動に変化なし).
+
+未コミットである. なお, 実運用パスでは発火しないと判明したことから, このバグ自体の緊急性は低かった (次回セッションでの優先度判断の参考情報として記録する).
