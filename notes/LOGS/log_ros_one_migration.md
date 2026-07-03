@@ -112,6 +112,37 @@ SAM3 は Python 3.10 で動作することが判明した. 実ゲートは `tran
 
 この判明を受けて, noble ベースの別コンテナ (`docker/segmenter.dockerfile`) を廃止し, jammy 単一コンテナへ統合した. `ros-one.dockerfile` に `transformers==5.12.1`, `huggingface_hub`, `accelerate`, `HF_HOME` を追加し, `docker/segmenter.dockerfile` を削除, `ros/sam3_segmenter/` の README を更新した. 統合後イメージの再ビルド検証はユーザー指示により中断し, 未実施 (`Sam3VideoModel` の import 確認を含め再開時に要対応, `notes/ISSUES.md` に追記済み).
 
+### stale な前提の訂正: SAM3 セグメンタは別コンテナではない
+
+`notes/CONTRACT_ros_one_online.md` と `notes/MINUTES_2026-07-02_ros_one_online.md` は, SAM 3 セグメンタが noble + Python 3.12 の別コンテナ (`docker/segmenter.dockerfile`) で動く前提のまま残っている. しかし前節 (SAM3 が Python 3.10 で動作可能と判明, コンテナ統合) で述べた通り, `docker/segmenter.dockerfile` は既に廃止され, SAM 3 の依存 (`transformers`, `huggingface_hub`, `accelerate`, `HF_HOME`) は `docker/ros-one.dockerfile` に統合済みである (commit f8a0428). したがって `sam3_segmenter` と本節以降で実装するトラッカーノードは同一コンテナで動く. エージェントは ROS ラッパーノード実装の作業に着手した際, 当初この点を見落として別コンテナ前提で案内したが, ユーザーの指摘を受けて `git log`/`git show f8a0428` で確認し訂正した. CONTRACT/MINUTES 側の記述更新は本セッションのスコープ外としたため, 該当箇所については本ログの記載を正とする.
+
+### ROS ラッパーノード実装 (`ros/bundlesdf_node/`)
+
+`notes/TODO.md` の未着手項目 (BundleSDF 側 ROS ラッパーノード実装) に対応する新規 catkin パッケージ `ros/bundlesdf_node/` を作成した.
+
+- `scripts/bundlesdf_node.py`: `~rgb_in`/`~depth_in`/`~camera_info_in`/`~mask_in` を `message_filters.ApproximateTimeSynchronizer` (slop=0.05s) で同期購読する. デコードは cv_bridge を使わず `np.frombuffer` で行い (本 fork の既存方式に合わせた), 同期フレームごとに既存の `bundlesdf.py` を無改造のまま `BundleSdf.run()` で呼ぶ. 姿勢は `BundleTrack` (C++) の出力である `<out_folder>/ob_in_cam/<id_str>.txt` から読み戻す (`scripts/compare_poses.py` が既に読んでいるのと同じパス). 読み戻した姿勢は `geometry_msgs/PoseStamped` として `~object_pose` に配信し, 同時に `tf2_ros.TransformBroadcaster` で TF (既定の子フレーム名 `tracked_object`) も配信する. 回転行列からクォータニオンへの変換には ROS 標準の `tf.transformations.quaternion_from_matrix` ではなく `scipy.spatial.transform.Rotation` を使った. `tf` パッケージのクォータニオン成分順序が ROS の規約と異なる上, `ros-one.dockerfile` には `tf` 自体がインストールされていない一方, `tf2_ros` はインストール済みだからである.
+- `package.xml`/`CMakeLists.txt` は `ros/sam3_segmenter` の構成に合わせた.
+- `launch/bundlesdf_node.launch`: トラッカー単体の起動用. デフォルトのトピック名は osx 側の実際のトピック名 (`/d455_1/color/image_rect`, `/d455_1/aligned_depth_to_color/image_raw`, `/d455_1/color/camera_info_rect`) と, `notes/CONTRACT_ros_one_online.md` §2 で凍結済みの `/sam3/mask` 契約に合わせた.
+- `launch/bundlesdf.launch`: `use_segmenter` 引数 (既定 true) で `sam3_segmenter.launch` を `<include>` する統合起動ファイル. `target_object` を SAM 3 のテキストプロンプトとして転送する. sam3_segmenter とトラッカーノードは同一コンテナで動くことが確定しているため, この 1 ファイルで両方を起動できる.
+- `README.md`: トピック契約表, パラメータ, 起動コマンド (単体/統合) を記載し, スコープ外の項目 (メッシュ/点群配信, ロボット状態の購読=`with_robot` トグル, トラッキング消失後の自動再初期化 — 消失フレームは単に FAIL のまま残る) を明記した.
+- 検証は `python3 -m py_compile` と XML パースのみで, 実行時動作 (rgb/depth/mask が実際に同期して届き, 姿勢が出るか) は本セッションのエージェント作業では確認していない.
+
+### `docker/docker-compose.yml` 追加
+
+単一サービス `bundlesdf` を定義した. `network_mode: host` + `ipc: host`. GPU 割り当ては非推奨の `runtime: nvidia` ではなく `deploy.resources.reservations.devices` (driver nvidia, capabilities [gpu]) で行う. 環境変数に `ROS_MASTER_URI=http://127.0.0.1:11311` と `ROS_IP=127.0.0.1` を設定した. host networking 下で共有ループバック越しにコンテナをまたいだ ROS ノード発見を成立させるための設定で, `ROS_IP` はイメージに焼き込まれた `ROS_HOSTNAME` を上書きする. 加えて `NVIDIA_DISABLE_REQUIRE=1`, リポジトリを `/workspace` にマウントするほか `/home`/`/tmp`/`/mnt` もマウントし, `/hf_cache` は名前付きボリュームにした. ビルドは既存の `docker/ros-one.dockerfile` (`context: ..`) から行う. `docker compose config` で検証した.
+
+### ROS1 シングルマスター前提の指摘
+
+osx 側 (roscore と RealSense d455 カメラを動かす別コンテナ, 別マシン/セッション) オペレータの計画は, 各コンテナが個別に `roscore` を立てるというものだった. これを問題として指摘した. ROS1 はシングルマスターであり, 別々の master に登録されたノードは互いのトピックを発見できない (劣化ではなく完全に不可視になる). 別 master 同士を橋渡しするには `multimaster_fkie` (`master_discovery`/`master_sync`) が必要だが, 今回の構成には含まれていない. ユーザーはこの指摘を確認し, osx 側を単一の共有 `roscore` に揃える方針で合意した.
+
+### `.devcontainer/devcontainer.json` 追加
+
+既存の `docker/docker-compose.yml` をラップする形で追加した (設定を二重に持たせない). `dockerComposeFile: ["../docker/docker-compose.yml"]`, `service: bundlesdf`, `workspaceFolder: /workspace`. `ros-one.dockerfile` は非 root ユーザーを持たず root で動く前提のため `remoteUser` は指定していない. `shutdownAction: "none"` とし, VS Code ウィンドウを閉じても roscore に依存する他セッション/exec シェルのプロセスを巻き込んで落とさないようにした. 拡張機能は最小限 (Python/Pylance/ruff, C++ tools + CMake Tools [`BundleTrack` の C++/CUDA ビルド用], `ms-iot.vscode-ros`, Docker, GitLens, YAML) に絞った. ユーザーの他リポジトリ (`docker-devcontainer-template`, `nerfstudio` 等) が使う pixi + 非 root ユーザーの devcontainer テンプレートは意図的に踏襲していない. 本リポジトリの `ros-one.dockerfile` は root ユーザー・非 pixi の構成であり, テンプレートをそのまま持ち込むと構成が食い違うと判断したためである.
+
+### devcontainer 経由での動作確認 (ユーザー確認)
+
+ユーザーが devcontainer を開き, compose サービスに対して起動できること, および osx 側コンテナとの ROS 通信が確立することを確認した ("ナイス. 行けたわ."). 確認できたのは devcontainer + compose + host networking 下でのクロスコンテナ ROS 疎通までであり, `bundlesdf_node`/`sam3_segmenter` のトラッキングパイプライン自体 (実際の rgb/depth/mask 同期購読から姿勢出力まで) を実機で動かした確認ではない. この切り分けは `notes/TODO.md` に反映した.
+
 ### プロセス構造の分解調査
 
 Opus によるサブエージェント調査で, メインプロセスおよび NeRF ワーカーの全サブステップを file:line 付きで確定した. 副産物として, C++ 側の `Bundler::runNerf` と zmq の 3 ポート構成は dead code であること, C++ 側の `Utils::Timer` はどこにもインスタンス化されておらず `TIMER=1` を立てても出力が無いことが判明した.
@@ -134,3 +165,11 @@ Opus によるサブエージェント調査で, メインプロセスおよび 
 - 定常フレーム (p90 以下, 1738 フレーム): `find_corres_ref`+`find_corres_local` ≈ 85ms/フレーム (内訳: `loftr_predict` 61.4ms, `ransac` 14.8ms, `get_pairs` 6.3ms), `save_result` 21.6ms, `optimize_gpu` 21.1ms, `select_kf` 15.5ms.
 - 経時劣化: total median は 5 分割で 138→180ms に増加. 増分は `select_kf` (2.6→24.9ms) と `save_result` (15.8→28.9ms) でほぼ説明でき, `find_corres`/`loftr_predict`/`optimize_gpu` は横ばい. キーフレーム蓄積に対する線形スケーリングが原因で, VRAM 単調増加 (17→26GB) と同根の可能性が高い.
 - 修正の優先順位提案: (1) NeRF ラウンドスループット改善 (`runner_build` の再利用 + ラウンド頭のウォームアップ排除で約 -18%/ラウンド, さらに train 反復数削減や warm-start は精度検証込みで), (2) `save_result` の非同期化 (定常 median -22ms, 実装容易), (3) `select_kf` のスケーリング対策 (終盤 -25ms, VRAM 問題と併せて調査). `loftr_predict` の fp16 化等は定常 median には効くが裾と無関係のため低優先.
+
+### loftr パス完走とプロファイル付きベンチの対称比較
+
+プロファイル付き再ベンチの loftr パスが完走し, 両バックエンドの対称比較が揃った. wall は eloftr 683.1s (2.83fps) vs loftr 713.7s (2.71fps, 差 4.3%), total median 163.5 vs 178.7ms (8.5%), マッチャー段 (`loftr_predict`) median 61.8 vs 79.0ms (21.8%). 裾構造は両者同一 (nerf_wait が wall の 52.7% / 50.7%). マッチャー単体では eloftr が明確に速いが, Amdahl 希釈と NeRF 律速により全体差は小さい, という 07-03 の分析結論を対称データでも確認した.
+
+### PERF_plan.md の再編
+
+perf CSV 分析の確定を受けて `notes/PERF_plan.md` を書き直した (日本語技術文書の文章規範に従いパラグラフライティングで再構成, 独自ラベル体系は不使用). 変更量ベースの旧 Tier 分類を廃し, 次の構成にした: (1) 目標の定義 (新しい観測から計算した姿勢の出力頻度だけを成果と数え, 同一姿勢の再出力やフレーム間引きを除外) と, 修正ごとの確認方法 (確認不要 / 軌跡整合 / 絶対精度の 3 段階), (2) 改善項目を"NeRF の同期待ちをなくす""毎フレームの処理を削る""長時間運用で速度を保つ"の 3 系統に整理, (3) 実施順 8 ステップ (結果保存の非同期化 → ランナー再構築の廃止とウォームアップ排除 → VRAM 切り分け → キーフレーム走査上限 → 同期ポリシー見直し → マッチャー opt 設定 → 学習反復削減 → 保留分の再判断). 計測により旧 Tier 1 (C++ の同期とメモリ確保) は該当区間の実測が小さく大レバーではないと判明したため保留に格下げした. 旧 Tier 番号は新文書に併記し参照互換を維持. `notes/ISSUES.md` の性能項目も新構成への参照に更新した. HO3D ADD/ADD-S ベンチはユーザー判断で優先度を下げ中断 (バックグラウンドエージェントは HO3D_ROOT 書き換えと gdown 準備まで実施済み, `data_reader.py` の 1 行変更は作業ツリーに残置).
