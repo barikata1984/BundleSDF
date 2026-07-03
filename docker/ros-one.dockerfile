@@ -61,6 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    time \
     python3-pip \
     python3-dev \
     libeigen3-dev \
