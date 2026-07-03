@@ -24,6 +24,7 @@ import pickle
 import matplotlib.pyplot as plt
 from nerf_helpers import *
 from Utils import *
+from perf_logger import get_profiler
 
 
 def batchify(fn, chunk):
@@ -677,13 +678,15 @@ class NerfRunner:
 
 
   def train_loop(self,batch):
+    prof = get_profiler('nerf_train', self.cfg['save_dir'])
     target_s = batch[:, self.ray_rgb_slice]    # Color (N,3)
     target_d = batch[:, self.ray_depth_slice]    # Normalized scale (N)
 
     target_mask = batch[:,self.ray_mask_slice].bool().reshape(-1)
     frame_ids = batch[:,self.ray_frame_id_slice]
 
-    rgb, extras = self.render(rays=batch, ray_ids=self.data_loader.batch_ray_ids, frame_ids=frame_ids,depth=target_d,lindisp=False,perturb=True,raw_noise_std=self.cfg['raw_noise_std'], near=batch[:,self.ray_near_slice], far=batch[:,self.ray_far_slice], get_normals=False)
+    with prof.span('render'):
+      rgb, extras = self.render(rays=batch, ray_ids=self.data_loader.batch_ray_ids, frame_ids=frame_ids,depth=target_d,lindisp=False,perturb=True,raw_noise_std=self.cfg['raw_noise_std'], near=batch[:,self.ray_near_slice], far=batch[:,self.ray_far_slice], get_normals=False)
 
     valid_samples = extras['valid_samples']   #(N_ray,N_samples)
     z_vals = extras['z_vals']  # [N_rand, N_samples + N_importance]
@@ -697,70 +700,73 @@ class NerfRunner:
     ray_weights[(frame_ids==0).view(-1)] = self.cfg['first_frame_weight']
     ray_weights = ray_weights*valid_rays.view(-1)
     sample_weights = ray_weights.view(N_rays,1).expand(-1,N_samples) * valid_samples
-    img_loss = (((rgb-target_s)**2 * ray_weights.view(-1,1))).mean()
-    rgb_loss = self.cfg['rgb_weight'] * img_loss
-    loss = rgb_loss
+    with prof.span('loss'):
+      img_loss = (((rgb-target_s)**2 * ray_weights.view(-1,1))).mean()
+      rgb_loss = self.cfg['rgb_weight'] * img_loss
+      loss = rgb_loss
 
-    rgb0_loss = torch.tensor(0)
-    if 'rgb0' in extras:
-      img_loss0 = (((extras['rgb0']-target_s)**2 * ray_weights.view(-1,1))).mean()
-      rgb0_loss = img_loss0*self.cfg['rgb_weight']
-      loss += rgb0_loss
+      rgb0_loss = torch.tensor(0)
+      if 'rgb0' in extras:
+        img_loss0 = (((extras['rgb0']-target_s)**2 * ray_weights.view(-1,1))).mean()
+        rgb0_loss = img_loss0*self.cfg['rgb_weight']
+        loss += rgb0_loss
 
-    depth_loss = torch.tensor(0)
-    depth_loss0 = torch.tensor(0)
-    if self.cfg['depth_weight']>0:
-      signs = sdf[:, 1:] * sdf[:, :-1]
-      mask = signs<0
-      inds = torch.argmax(mask.float(), axis=1)
-      inds = inds[..., None]
-      z_min = torch.gather(z_vals,dim=1,index=inds)
-      weights = ray_weights * (depth<=self.cfg['far']*self.cfg['sc_factor']) * (mask.any(dim=-1))
-      depth_loss = ((z_min*weights-depth.view(-1,1)*weights)**2).mean() * self.cfg['depth_weight']
-      loss = loss+depth_loss
+      depth_loss = torch.tensor(0)
+      depth_loss0 = torch.tensor(0)
+      if self.cfg['depth_weight']>0:
+        signs = sdf[:, 1:] * sdf[:, :-1]
+        mask = signs<0
+        inds = torch.argmax(mask.float(), axis=1)
+        inds = inds[..., None]
+        z_min = torch.gather(z_vals,dim=1,index=inds)
+        weights = ray_weights * (depth<=self.cfg['far']*self.cfg['sc_factor']) * (mask.any(dim=-1))
+        depth_loss = ((z_min*weights-depth.view(-1,1)*weights)**2).mean() * self.cfg['depth_weight']
+        loss = loss+depth_loss
 
-    truncation = self.get_truncation()
-    sample_weights[ray_type==1] = 0
-    fs_loss, sdf_loss,front_mask,sdf_mask = get_sdf_loss(z_vals, target_d.reshape(-1,1).expand(-1,N_samples), sdf, truncation, self.cfg,return_mask=True, sample_weights=sample_weights, rays_d=batch[:,self.ray_dir_slice])
-    fs_loss = fs_loss*self.cfg['fs_weight']
-    sdf_loss = sdf_loss*self.cfg['trunc_weight']
-    loss = loss + fs_loss + sdf_loss
+      truncation = self.get_truncation()
+      sample_weights[ray_type==1] = 0
+      fs_loss, sdf_loss,front_mask,sdf_mask = get_sdf_loss(z_vals, target_d.reshape(-1,1).expand(-1,N_samples), sdf, truncation, self.cfg,return_mask=True, sample_weights=sample_weights, rays_d=batch[:,self.ray_dir_slice])
+      fs_loss = fs_loss*self.cfg['fs_weight']
+      sdf_loss = sdf_loss*self.cfg['trunc_weight']
+      loss = loss + fs_loss + sdf_loss
 
-    fs_rgb_loss = torch.tensor(0)
-    if self.cfg['fs_rgb_weight']>0:
-      fs_rgb_loss = ((((torch.sigmoid(extras['raw'][...,:3])-1)*front_mask[...,None])**2) * sample_weights[...,None]).mean()
-      loss += fs_rgb_loss*self.cfg['fs_rgb_weight']
+      fs_rgb_loss = torch.tensor(0)
+      if self.cfg['fs_rgb_weight']>0:
+        fs_rgb_loss = ((((torch.sigmoid(extras['raw'][...,:3])-1)*front_mask[...,None])**2) * sample_weights[...,None]).mean()
+        loss += fs_rgb_loss*self.cfg['fs_rgb_weight']
 
-    eikonal_loss = torch.tensor(0)
-    if self.cfg['eikonal_weight']>0:
-      nerf_normals = extras['normals']
-      eikonal_loss = ((torch.norm(nerf_normals[sdf<1], dim=-1)-1)**2).mean() * self.cfg['eikonal_weight']
-      loss += eikonal_loss
+      eikonal_loss = torch.tensor(0)
+      if self.cfg['eikonal_weight']>0:
+        nerf_normals = extras['normals']
+        eikonal_loss = ((torch.norm(nerf_normals[sdf<1], dim=-1)-1)**2).mean() * self.cfg['eikonal_weight']
+        loss += eikonal_loss
 
-    point_cloud_loss = torch.tensor(0)
-    point_cloud_normal_loss = torch.tensor(0)
+      point_cloud_loss = torch.tensor(0)
+      point_cloud_normal_loss = torch.tensor(0)
 
 
-    reg_features = torch.tensor(0)
-    if self.models['feature_array'] is not None:
-      reg_features = self.cfg['feature_reg_weight'] * (self.models['feature_array'].data**2).mean()
-      loss += reg_features
+      reg_features = torch.tensor(0)
+      if self.models['feature_array'] is not None:
+        reg_features = self.cfg['feature_reg_weight'] * (self.models['feature_array'].data**2).mean()
+        loss += reg_features
 
-    if self.models['pose_array'] is not None:
-      pose_array = self.models['pose_array']
-      pose_reg = self.cfg['pose_reg_weight']*pose_array.data[1:].norm()
-      loss += pose_reg
+      if self.models['pose_array'] is not None:
+        pose_array = self.models['pose_array']
+        pose_reg = self.cfg['pose_reg_weight']*pose_array.data[1:].norm()
+        loss += pose_reg
 
-    variation_loss = torch.tensor(0)
+      variation_loss = torch.tensor(0)
 
     self.optimizer.zero_grad()
 
-    self.amp_scaler.scale(loss).backward()
+    with prof.span('backward'):
+      self.amp_scaler.scale(loss).backward()
 
-    self.amp_scaler.step(self.optimizer)
-    self.amp_scaler.update()
-    if self.global_step%10==0 and self.global_step>0:
-      self.schedule_lr()
+    with prof.span('opt_step'):
+      self.amp_scaler.step(self.optimizer)
+      self.amp_scaler.update()
+      if self.global_step%10==0 and self.global_step>0:
+        self.schedule_lr()
 
     if self.global_step%self.cfg['i_weights']==0 and self.global_step>0:
       self.save_weights(out_file=os.path.join(self.cfg['save_dir'], f'model_latest.pth'), models=self.models)
@@ -852,15 +858,20 @@ class NerfRunner:
         self._run.add_artifact(dir)
 
 
-  def train(self):
+  def train(self, round_id=0, prof_dir=None):
     set_seed(0)
 
+    prof = get_profiler('nerf_train', prof_dir if prof_dir is not None else self.cfg['save_dir'])
+    prof.start()
     for iter in range(self.N_iters):
       if iter%(self.N_iters//10)==0:
         logging.info(f'train progress {iter}/{self.N_iters}')
-      batch = next(self.data_loader)
+      with prof.span('batch_get'):
+        batch = next(self.data_loader)
       self.train_loop(batch.cuda())
       self.global_step += 1
+      if (iter+1)%50==0:
+        prof.flush(round_id, f"{iter-49}-{iter}")
 
 
   def make_key_ray_ids(self):

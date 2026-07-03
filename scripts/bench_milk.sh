@@ -45,7 +45,7 @@ for BACKEND in eloftr loftr; do
 
   echo "=== [bench_milk] backend=${BACKEND} out_folder=${OUT_FOLDER} ==="
 
-  BUNDLESDF_MATCHER="${BACKEND}" /usr/bin/time -v -o "${TIME_LOG}" \
+  BUNDLESDF_PROFILE=1 BUNDLESDF_MATCHER="${BACKEND}" /usr/bin/time -v -o "${TIME_LOG}" \
     python3 "${REPO_DIR}/scripts/bench_milk.py" \
       --video_dir "${VIDEO_DIR}" \
       --out_folder "${OUT_FOLDER}" \
