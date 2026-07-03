@@ -153,7 +153,6 @@ if __name__=='__main__':
 
   video_dirs = args.video_dirs.split(',')
   out_data = {}
-  args = []
   for video_dir in video_dirs:
     out = benchmark_one_video(method, video_dir)
     out_data.update(out)
