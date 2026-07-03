@@ -227,3 +227,17 @@ Agent ツールで `model` パラメータを明示指定 (opus/sonnet/haiku) �
 原因は, 施策の説明・実測結果・採用判断が地の文でひと続きになっており, 読み手がどのモードで読むべきか構造から判別できない点にあった.
 該当項目のみ"実装""結果""判断"の 3 つの小見出しに分離して修正した.
 他の実施済み項目 (ランナー再構築の廃止, NeRF 子プロセス死活チェック追加) は元々短く自然に読めるため変更していない.
+
+### HO3D ベンチマークデータの取得
+
+readme.md の "Data download" 節に従い, Google Drive から `evaluation.zip` (6.3GB, HO3D augmented eval-split の rgb/depth/meta/GT 動画データ), `masks_XMem.zip` (30MB, 物体マスク事前計算済み), YCB-Video 物体モデル zip (385MB) の 3 点を `data/ho3d_dl/` にダウンロードした. `masks_XMem` と `models` は全展開し, `evaluation.zip` は `SM1` (マスタードボトル, 898 フレーム) のみを `data/HO3D_v3/{evaluation/SM1,masks_XMem,models}` に展開した (残り 12 動画は zip 内に残置し, 必要になれば個別に追加展開できる). `BundleTrack/scripts/data_reader.py` の `Ho3dReader` がこのレイアウトから K/depth/mask/GT 姿勢/GT メッシュを正しく読み込めることをコード変更なしで確認した (`HO3D_ROOT` は前セッションから既に `/workspace/data/HO3D_v3` を指すよう設定済みだった).
+
+なお, `notes/PERF_plan.md` の改善項目のうち"確認不要"に分類された項目群 (`save_result` 非同期化, `loftr_wrapper.py` の転送順修正, 二重 `no_grad` 削除, `confs_gpu` の cudaFree 漏れ修正, `astype(bool, copy=False)`, f-string ログの遅延評価, 対応点分割のソートベース化) はサブエージェント経由で並行実装した. 詳細は `notes/PERF_plan.md`/`notes/ISSUES.md`/`notes/REVIEW_findings.md` を参照 (いずれも当該セッション内で更新済み).
+
+### 精度ガードレール構築: run_ho3d.py / benchmark_ho3d.py の完走とバグ修正
+
+`run_ho3d.py --video_dirs .../SM1` を現行既定設定 (eloftr バックエンド + warm-start `reuse_weights=True`/`n_step_warm=300`) で実行し, 898 フレーム全てでエラーなく完走, `ob_in_cam/*.txt` が全フレーム分出力されることを確認した.
+
+続けて `benchmark_ho3d.py` を実行したところ, 本フォークの ROS/perf 作業とは無関係な upstream 由来のバグを 2 件踏んだ. 1 件目は `benchmark_ho3d.py:156` で, `argparse.parse_args()` 直後に到達不能な `args = []` という行があり, `benchmark_one_video()` (グローバル変数として `args.out_dir`/`args.log_dir` を参照する) をループ呼び出しする直前で `args` を空リストに上書きしてしまい, 即座に `AttributeError: 'list' object has no attribute 'out_dir'` で落ちていた. 該当行を削除して修正した. 2 件目は `Utils.py` の `trimesh_clean()` で, インストール済み `trimesh` 4.12.2 で既に削除されている `remove_degenerate_faces()`/`remove_duplicate_faces()` を呼んでおり `AttributeError` になっていた. 現行の mask ベース API である `mesh.update_faces(mesh.nondegenerate_faces())` / `mesh.update_faces(mesh.unique_faces())` に置き換えて修正した (`remove_infinite_values()`/`remove_unreferenced_vertices()` は 4.12.2 でも有効なため変更していない). いずれも 1 行規模の trivial な修正でありサブエージェントを介さず直接対応した. 両修正とも作業ツリーに残置し未コミット.
+
+修正後 `benchmark_ho3d.py` は完走し, SM1 (マスタードボトル, 898 フレーム, eloftr + warm-start) で ADD 2.20cm, ADD-S 0.98cm, ADD_AUC 78.10%, ADDS_AUC 90.18%, chamfer distance 0.52cm を得た. 出力一式は `data/bench_results/ho3d_log/` と `data/bench_results/ho3d_ours/SM1/` (いずれも gitignore 対象). この数値自体が良好かどうかは upstream 論文値との比較が必要でまだ評価しておらず, 本セッションの主眼はそこではなく, GT 付き精度ガードレール (`run_ho3d.py` → `benchmark_ho3d.py`) が一気通貫で動く状態を作ったことにある. 今後の絶対精度比較 (`BUNDLESDF_MATCHER=loftr` での再実行による eloftr との比較, warm-start on/off の比較, その他 `notes/PERF_plan.md` の"絶対精度の確認"段階の項目) は, この枠組みを設定だけ変えて再実行すれば着手できる.
