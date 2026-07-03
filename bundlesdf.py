@@ -382,14 +382,17 @@ def run_nerf(p_dict, kf_to_nerf_list, lock, cfg_nerf, translation, sc_factor, st
       if cfg_nerf['continual']:
         logging.info(f"add_new_frames, latest nerf frame {frame_id}")
         with prof.span('runner_build'):
-          nerf.add_new_frames(rgbs,depths,masks,normal_maps,poses,occ_masks=occ_masks, new_pcd=pcd_normalized, reuse_weights=False)
+          nerf.add_new_frames(rgbs,depths,masks,normal_maps,poses,occ_masks=occ_masks, new_pcd=pcd_normalized, reuse_weights=cfg_nerf.get('nerf_reuse_weights', True))
       else:
         with prof.span('runner_build'):
           nerf = NerfRunner(cfg_nerf,rgbs,depths=depths,masks=masks,normal_maps=normal_maps,occ_masks=occ_masks,poses=poses,K=K,build_octree_pcd=pcd_normalized)
 
     logging.info(f"Start training, latest nerf frame {frame_id}")
+    train_n_iters = None
+    if cnt_nerf>0 and cfg_nerf['continual'] and cfg_nerf.get('nerf_reuse_weights', True):
+      train_n_iters = cfg_nerf.get('n_step_warm', cfg_nerf['n_step'])
     with prof.span('train_total'):
-      nerf.train(round_id=cnt_nerf, prof_dir=debug_dir)
+      nerf.train(round_id=cnt_nerf, prof_dir=debug_dir, n_iters=train_n_iters)
     logging.info(f"Training done, latest nerf frame {frame_id}")
 
     optimized_cvcam_in_obs,offset = get_optimized_poses_in_real_world(poses,nerf.models['pose_array'],cfg_nerf['sc_factor'],cfg_nerf['translation'])
@@ -760,6 +763,8 @@ class BundleSdf:
       ############# Wait for sync
       with self.prof.span('nerf_wait'):
         while 1:
+          if not self.p_nerf.is_alive():
+            raise RuntimeError(f"NeRF worker process died (exitcode={self.p_nerf.exitcode}); aborting to avoid infinite wait")
           with self.lock:
             running = self.p_dict['running']
             nerf_num_frames = self.p_dict['nerf_num_frames']

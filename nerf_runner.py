@@ -385,7 +385,7 @@ class NerfRunner:
     else:
       ########### Add new frame weights
       if self.cfg['frame_features'] > 0:
-        feature_array = FeatureArray(len(self.images), self.cfg['frame_features']).to(self.rays.device)
+        feature_array = FeatureArray(len(self.images), self.cfg['frame_features']).to(self.c2w_array.device)
         if reuse_weights:
           for i in range(prev_n_image):
             feature_array.data.data[i] = self.models['feature_array'].data.data[i].detach().clone()
@@ -393,7 +393,7 @@ class NerfRunner:
 
       ########!NOTE Dont need to copy delta poses, they are new
       if self.cfg['optimize_poses']:
-        pose_array = PoseArray(len(self.images),max_trans=self.cfg['max_trans']*self.cfg['sc_factor'],max_rot=self.cfg['max_rot']).to(self.rays.device)
+        pose_array = PoseArray(len(self.images),max_trans=self.cfg['max_trans']*self.cfg['sc_factor'],max_rot=self.cfg['max_rot']).to(self.c2w_array.device)
         self.models['pose_array'] = pose_array
 
     self.create_optimizer()
@@ -858,8 +858,10 @@ class NerfRunner:
         self._run.add_artifact(dir)
 
 
-  def train(self, round_id=0, prof_dir=None):
+  def train(self, round_id=0, prof_dir=None, n_iters=None):
     set_seed(0)
+    if n_iters is not None:
+      self.N_iters = n_iters
 
     prof = get_profiler('nerf_train', prof_dir if prof_dir is not None else self.cfg['save_dir'])
     prof.start()

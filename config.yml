@@ -100,3 +100,5 @@ dbscan_eps_min_samples: 1
 
 ####### bundlenerf
 sync_max_delay: 3   # allowed keyframe backlog before tracking blocks; 0 for strict sync
+nerf_reuse_weights: True   # warm-start NeRF from previous round's weights; False restores per-round reinit
+n_step_warm: 300           # training iters for warm-start rounds (round>0); first round uses n_step
