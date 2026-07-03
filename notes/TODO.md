@@ -22,5 +22,5 @@
 - [ ] BundleSDF 側 ROS ラッパーノード実装 (rgb+depth+mask を同期購読し PoseStamped/TF を配信)
 - [x] リモート origin 変更 + feat/ros-one-online ブランチの push (2026-07-02, origin=barikata1984/BundleSDF)
 - [ ] SAM3 統合後イメージの再ビルドと `Sam3VideoModel` import 検証 (ユーザー指示で中断した分の再開)
-- [ ] perf CSV (`perf_main.csv`/`perf_nerf.csv`/`perf_nerf_train.csv`) を使ったフルベンチの内訳分析 (Tier 1/3 修正の優先順位決め)
+- [x] perf CSV (`perf_main.csv`/`perf_nerf.csv`/`perf_nerf_train.csv`) を使ったフルベンチの内訳分析 (Tier 1/3 修正の優先順位決め) (2026-07-03, log 参照)
 - [ ] VRAM 単調増加 (17→26GB) の要因確認 (キーフレーム蓄積 vs `confs_gpu` リーク)
