@@ -38,12 +38,34 @@ WARMUP_FRAMES="${WARMUP_FRAMES:-5}"
 
 mkdir -p "${RESULTS_DIR}"
 
+# Whole-GPU memory poller (both processes combined, i.e. the nvidia-smi view) so
+# per-process torch numbers in perf_main.csv/perf_nerf.csv can be cross-checked.
+GPU_MON_PID=""
+start_gpu_mon() {
+  local log="$1"
+  # Single long-running nvidia-smi (no child sleep) so kill leaves no zombie;
+  # -l prints the CSV header once, then one row every 5s.
+  nvidia-smi --query-gpu=timestamp,memory.used,memory.total --format=csv,nounits -l 5 \
+    > "${log}" 2>/dev/null &
+  GPU_MON_PID=$!
+}
+stop_gpu_mon() {
+  [[ -n "${GPU_MON_PID}" ]] || return 0
+  kill "${GPU_MON_PID}" 2>/dev/null || true
+  wait "${GPU_MON_PID}" 2>/dev/null || true
+  GPU_MON_PID=""
+}
+trap stop_gpu_mon EXIT INT TERM
+
 for BACKEND in eloftr loftr; do
   OUT_FOLDER="${OUT_ROOT}/out_milk_${BACKEND}"
   CSV_OUT="${RESULTS_DIR}/${BACKEND}_frame_times.csv"
   TIME_LOG="${RESULTS_DIR}/${BACKEND}_time.log"
+  GPU_MEM_LOG="${RESULTS_DIR}/${BACKEND}_gpu_mem.csv"
 
   echo "=== [bench_milk] backend=${BACKEND} out_folder=${OUT_FOLDER} ==="
+
+  start_gpu_mon "${GPU_MEM_LOG}"
 
   BUNDLESDF_PROFILE=1 BUNDLESDF_MATCHER="${BACKEND}" /usr/bin/time -v -o "${TIME_LOG}" \
     python3 "${REPO_DIR}/scripts/bench_milk.py" \
@@ -56,7 +78,9 @@ for BACKEND in eloftr loftr; do
       --csv_out "${CSV_OUT}" \
     2>&1 | tee "${RESULTS_DIR}/${BACKEND}_run.log"
 
-  echo "=== [bench_milk] backend=${BACKEND} done; wall-clock/RSS: ${TIME_LOG} ==="
+  stop_gpu_mon
+
+  echo "=== [bench_milk] backend=${BACKEND} done; wall-clock/RSS: ${TIME_LOG}; gpu_mem: ${GPU_MEM_LOG} ==="
 done
 
 echo "=== [bench_milk] comparing eloftr vs loftr pose trajectories ==="

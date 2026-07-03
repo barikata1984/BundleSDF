@@ -28,6 +28,30 @@ _SCHEMAS = {
 
 _NULL = nullcontext()
 
+_torch = None
+_cuda_ok = None
+
+
+def _vram_mib():
+  """Return this process's (allocated, reserved) GPU memory in MiB.
+
+  allocated is what PyTorch currently uses (good for leak detection); reserved
+  is the caching allocator's total (closer to nvidia-smi). Returns (nan, nan)
+  when torch/CUDA is unavailable so the profiler never crashes off-GPU.
+  """
+  global _torch, _cuda_ok
+  if _cuda_ok is None:
+    try:
+      import torch
+      _torch = torch
+      _cuda_ok = torch.cuda.is_available()
+    except Exception:
+      _cuda_ok = False
+  if not _cuda_ok:
+    return float('nan'), float('nan')
+  scale = 1.0 / (1024 * 1024)
+  return _torch.cuda.memory_allocated() * scale, _torch.cuda.memory_reserved() * scale
+
 
 class SpanProfiler:
   def __init__(self, out_dir, schema):
@@ -43,7 +67,8 @@ class SpanProfiler:
     self._fh = open(os.path.join(out_dir, schema['filename']), 'w', newline='')
     self._w = csv.writer(self._fh)
     header = list(schema['id_cols']) + [f'{n}_ms' for n in self._names] \
-      + [f'{n}_n' for n in self._names if n in self._sub] + ['total_ms', 'residual_ms']
+      + [f'{n}_n' for n in self._names if n in self._sub] + ['total_ms', 'residual_ms'] \
+      + ['vram_alloc_mib', 'vram_reserved_mib']
     self._w.writerow(header)
     self._fh.flush()
 
@@ -78,7 +103,8 @@ class SpanProfiler:
     row = list(ids)
     row += [round(self._ms.get(n, 0.0), 3) for n in self._names]
     row += [self._n.get(n, 0) for n in self._names if n in self._sub]
-    row += [round(total, 3), round(total - top_sum, 3)]
+    alloc, reserved = _vram_mib()
+    row += [round(total, 3), round(total - top_sum, 3), round(alloc, 1), round(reserved, 1)]
     self._w.writerow(row)
     self._fh.flush()
     self._ms.clear()
