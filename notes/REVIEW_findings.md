@@ -10,7 +10,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 |---|---|---|---|---|---|
 | 1 | `bundlesdf.py:606` | CONFIRMED | **修正済み** (d403e4c) | 参照フレーム再探索経路に `pdb.set_trace()` 残置 | マッチ数低下 (高速運動・遮蔽) で非対話実行が stdin 待ちで永久停止 |
 | 2 | `BundleTrack/src/Bundler.cpp:1308` | CONFIRMED | 未修正 | runNerf が zmq 応答をサイズ未検証で `frames.size()*16` float memcpy | 短い応答でバッファ外読み → クラッシュ/姿勢破損 |
-| 3 | `BundleTrack/src/FeatureManager.cpp:1661` | CONFIRMED | **修正済み** (2026-07-03, 未コミット) | `confs_gpu` だけ cudaFree 漏れ (解放ループ 1703-1711 に含まれず) | 長時間トラッキングで GPU メモリリーク → CUDA OOM. VRAM 単調増加の一因の可能性. リビルド・`my_cpp` import 確認済み, 再ベンチによる VRAM 増加分の切り分けは未実施 |
+| 3 | `BundleTrack/src/FeatureManager.cpp:1661` | CONFIRMED | **修正済み** (e894df9) | `confs_gpu` だけ cudaFree 漏れ (解放ループ 1703-1711 に含まれず) | 長時間トラッキングで GPU メモリリーク → CUDA OOM. VRAM 単調増加の一因の可能性. リビルド・`my_cpp` import 確認済み, 再ベンチによる VRAM 増加分の切り分けは未実施 |
 | 4 | `run_custom.py:84` | CONFIRMED | 未修正 | `use_segmenter=1` 経路のみマスク未リサイズ (reader は shorter_side=480 に縮小済み) | 解像度不一致のまま C++ へ → 前景マスク silent corruption / 範囲外アクセス. **ベンチは use_segmenter=0 で回避** |
 | 5 | `bundlesdf.py:688` | CONFIRMED | 未修正 | 空マスク時の `np.percentile(空配列)` ガードなし | 完全遮蔽・フレームアウトで実行全体がクラッシュ |
 | 6 | `loftr_wrapper.py:116` | PLAUSIBLE | 未修正 | マッチ 0 件で `mconf.min()/max()` (ログ行) が空配列 reduction | テクスチャ欠乏ペアで `predict()` ごと ValueError |
@@ -56,7 +56,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 
 オンライン ROS 運用で実際に踏む順は #1→#7 だが #1 は修正済み. 優先度は:
 
-1. **#3 confs_gpu リーク**: 修正済み (2026-07-03, `cudaFree` 1 行追加, リビルド・import 確認済み, 未コミット). VRAM 単調増加の残存分がキーフレーム蓄積由来かどうかの再ベンチによる切り分けは未実施.
+1. **#3 confs_gpu リーク**: 修正済み (e894df9, `cudaFree` 1 行追加, リビルド・import 確認済み). VRAM 単調増加の残存分がキーフレーム蓄積由来かどうかの再ベンチによる切り分けは未実施.
 2. **#2 zmq memcpy overread / #8 FAIL 非 return**: C++ の堅牢性. runNerf は現状 dead code (Python 側 run_nerf ワーカーを使用) なので #2 の実害は低いが, C++ runNerf を使う経路に戻すなら要修正.
 3. **#5 percentile 空配列 / #6 mconf 空**: Python 側, いずれも数行のガード追加. オンライン長時間運用の安定性に効く. #7 (nerf 子死活) は本セッションで修正済み (bundlesdf.py:762-767).
 4. cleanup 系と圏外バグは perf 改善 (PERF_plan.md) と合わせて判断.

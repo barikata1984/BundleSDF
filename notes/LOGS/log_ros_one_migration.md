@@ -241,3 +241,25 @@ readme.md の "Data download" 節に従い, Google Drive から `evaluation.zip`
 続けて `benchmark_ho3d.py` を実行したところ, 本フォークの ROS/perf 作業とは無関係な upstream 由来のバグを 2 件踏んだ. 1 件目は `benchmark_ho3d.py:156` で, `argparse.parse_args()` 直後に到達不能な `args = []` という行があり, `benchmark_one_video()` (グローバル変数として `args.out_dir`/`args.log_dir` を参照する) をループ呼び出しする直前で `args` を空リストに上書きしてしまい, 即座に `AttributeError: 'list' object has no attribute 'out_dir'` で落ちていた. 該当行を削除して修正した. 2 件目は `Utils.py` の `trimesh_clean()` で, インストール済み `trimesh` 4.12.2 で既に削除されている `remove_degenerate_faces()`/`remove_duplicate_faces()` を呼んでおり `AttributeError` になっていた. 現行の mask ベース API である `mesh.update_faces(mesh.nondegenerate_faces())` / `mesh.update_faces(mesh.unique_faces())` に置き換えて修正した (`remove_infinite_values()`/`remove_unreferenced_vertices()` は 4.12.2 でも有効なため変更していない). いずれも 1 行規模の trivial な修正でありサブエージェントを介さず直接対応した. 両修正とも作業ツリーに残置し未コミット.
 
 修正後 `benchmark_ho3d.py` は完走し, SM1 (マスタードボトル, 898 フレーム, eloftr + warm-start) で ADD 2.20cm, ADD-S 0.98cm, ADD_AUC 78.10%, ADDS_AUC 90.18%, chamfer distance 0.52cm を得た. 出力一式は `data/bench_results/ho3d_log/` と `data/bench_results/ho3d_ours/SM1/` (いずれも gitignore 対象). この数値自体が良好かどうかは upstream 論文値との比較が必要でまだ評価しておらず, 本セッションの主眼はそこではなく, GT 付き精度ガードレール (`run_ho3d.py` → `benchmark_ho3d.py`) が一気通貫で動く状態を作ったことにある. 今後の絶対精度比較 (`BUNDLESDF_MATCHER=loftr` での再実行による eloftr との比較, warm-start on/off の比較, その他 `notes/PERF_plan.md` の"絶対精度の確認"段階の項目) は, この枠組みを設定だけ変えて再実行すれば着手できる.
+
+### bench_milk.sh フルベンチによる 3 件の効果測定 (save_result 非同期化・転送順修正・confs_gpu リーク修正)
+
+eloftr フルベンチ (1932 フレーム) を `data/out_milk_eloftr_async/` に完走させ, warm-start 適用済みの直前 baseline `out_milk_eloftr_item1` (壁時計 501.4s) と比較した. 壁時計は 683.1s (orig) → 501.4s (item1, warm-start) → 468.3s (async, 今回 3 件込み, item1 比 -6.6%) となり, 実効 fps は 2.83 → 3.85 → 4.13 に上がった. フレーム total median は 163.6ms → 161.7ms → 139.3ms, p90 は 227.9ms → 224.5ms → 198.6ms, nerf_wait は 359.9s (52.7%) → 180.1s (35.9%) → 193.5s (41.3%) だった.
+
+3 件の内訳を切り分けると, 効果の大部分は結果保存の非同期化に由来する. `save_result` median は 21.95ms (orig) → 21.99ms (item1) → 0.01ms (async) まで下がり, これがフレーム median の -22.4ms と壁時計 -6.6% にほぼ対応する. `PERF_plan.md` の見込みどおりの効果だった. 転送順の修正 (`loftr_wrapper.py:80-81` の `.cuda()`/`.float()` 順序変更) は `loftr_predict` median を 61.83ms (item1) → 58.98ms (async) へ -3.0ms 縮め, 見込み (「数 ms」) と一致した. `confs_gpu` の cudaFree 漏れ修正 (`FeatureManager.cpp:1712`) については, VRAM 推移が 15.6→16.2→16.8→20.6→27.4GB (ピーク 27.7GB) と baseline (17→26GB) と同型の単調増加を継続しており, マクロな VRAM 曲線には効いていないことが分かった. 修正が対象とする確保・解放は RANSAC ペア単位の小さい規模であり, VRAM 単調増加の主因はキーフレーム蓄積 (終盤 262 keyframes) にあると判断した. ただしこの判断は後述する簡易計測に基づくものであり, 正式な VRAM ロギングでの確証はまだ得ていない.
+
+見せかけ高速化の懸念に対しては, 新規作成した `scripts/check_repeated_poses.py` (未コミット) で `ob_in_cam` 1932 個を検査し, 連続フレーム同一姿勢の繰り返しが 0 件, 並進 median 0.178cm・回転 median 1.05° であることを確認した. フレーム間引きによる偽の高速化ではない.
+
+### VRAM 計測ロジックの実装と, 今回の計測が正式実装によらないことについて
+
+`notes/PERF_plan.md` の「VRAM 単調増加の要因確認」は, 既存のベンチコードに VRAM 計測が一切なく実施不能だったため, `perf_logger.py` に `_vram_mib()` を追加し, `SpanProfiler.flush()` 時に `vram_alloc_mib` (`torch.cuda.memory_allocated`) と `vram_reserved_mib` (`torch.cuda.memory_reserved`) を CSV 末尾に追記するようにした (`BUNDLESDF_PROFILE=1` 時のみ有効, CUDA 不可時は nan を返し例外を出さない. `perf_main.csv`/`perf_nerf.csv`/`perf_nerf_train.csv` 全てに適用, 既存の timing 列は無変更). `scripts/bench_milk.sh` にも, `nvidia-smi --query-gpu=timestamp,memory.used,memory.total -l 5` を単一プロセスでバックグラウンド起動する `start_gpu_mon`/`stop_gpu_mon` を追加し, `trap EXIT INT TERM` で確実に停止させ, プロセス全体 (メイントラッキング+NeRF ワーカーの合算) の VRAM 推移を `${BACKEND}_gpu_mem.csv` に記録するようにした. 最初は while+sleep によるループでポーリングする実装にしたが, 停止時にゾンビプロセスが残ることを実測で確認したため, 単一の `nvidia-smi -l 5` プロセスを起動する方式に変更した経緯がある. smoke test (256MiB 確保後に flush) で `vram_alloc_mib=256.0` 等の妥当な値が出ることを確認し, 既存の集計ツール `scripts/perf_stats.py` が新しい列があってもクラッシュしないことも確認した. 両ファイルとも未コミットである.
+
+この実装には時系列上の注意点がある. 上記の bench_milk.sh フルベンチ (async) は, この VRAM 計測ロジックの実装が完成する前後のタイミングで実行されており, 実際に `data/out_milk_eloftr_async/perf_main.csv` を確認すると `vram_alloc_mib`/`vram_reserved_mib` 列は入っていない. そのため今回の VRAM 切り分けの数値根拠は, この正式実装ではなく, ベンチ実行時に別途用意した簡易計測 (`data/bench_results/async_vram.csv`, timestamp と memory_used の 2 列のみ) によるものである. 次回セッションでは, このロジックがフルベンチ実行時に実際に `perf_main.csv` へ列を出力することの動作確認がまだ済んでいない.
+
+### gridencoder の ModuleNotFoundError
+
+bench-verify のフルベンチ実行前, frame 116 (初回 NeRF ラウンド) で NeRF ワーカーが `ModuleNotFoundError: No module named 'gridencoder'` でクラッシュした. 2026-07-03 に追加済みの NeRF 子プロセス死活チェック (`bundlesdf.py:762-767`, PERF_plan.md 改善項目1 参照) がこれを検知して処理を中断しており, 死活チェック自体は意図どおりに機能した.
+
+原因は `mycuda/setup.py` の `gridencoder` 拡張がトップレベルのモジュールとしてビルドされ, `.so` が `/workspace/mycuda/gridencoder.cpython-310-*.so` に配置される一方, `mycuda/torch_ngp_grid_encoder/grid.py:23` は自ディレクトリのみを `sys.path` に足して bare `import gridencoder` していることにある. NeRF ワーカーは `multiprocessing.Process` で spawn され, その `sys.path` は repo root のみを含むため, `gridencoder` を解決できない. 7/2 時点の baseline ではこのエラーが出ていなかったが, これは当時 `.so` が別の場所にあったためで, 直近のリビルドで配置パスが変わったことが原因と考えられる.
+
+今回は config・コードを変更せず, NeRF ワーカー起動時の環境変数に `PYTHONPATH=/workspace/mycuda` を追加してその場しのぎで回避したのみである. これは NeRF を回す全ての実行に影響する環境問題であり, `grid.py` が親ディレクトリを `sys.path` に足すように直すか, `gridencoder` を import 可能な場所に install するかたちの恒久対処が必要で, 次回セッションの最優先課題とする.
