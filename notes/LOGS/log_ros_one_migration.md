@@ -536,4 +536,28 @@ else:
 
 GPU 世代が揃っていない (Cutie 系は V100, SAM3 系は H100) ため単純比較はできないが, 桁感としては2段構成 (SAM3 で初期マスク→Cutie 等で伝播) の方が定常状態で数倍速いと見積もった.
 
+## 2026-07-03 (続き): MPS 導入の恒久化 (実装のみ, Docker 実ビルドは未実施)
+
+`notes/PERF_plan.md` 改善項目3「MPS の導入」は, セッション内での手動有効化による検証 (壁時計 -9.7%, fps +10.7% 等) は済んでいたが, `docker-compose.yml`/dockerfile への恒久組み込みは別タスクとして未着手のままだった. 今回, 恒久組み込みの実装を行った.
+
+`docker/mps-entrypoint.sh` を新規作成した. 内容は次のとおりである. `CUDA_MPS_PIPE_DIRECTORY`/`CUDA_MPS_LOG_DIRECTORY` を未設定時は `/run/nvidia-mps` にデフォルト設定する. `nvidia-cuda-mps-control -d` で MPS 制御デーモンを起動する (失敗しても非致命的にコンテナは起動継続させる). CMD をバックグラウンド実行して `wait` する. SIGTERM/SIGINT を trap し, CMD へシグナルを転送して終了を待ってから `echo quit | nvidia-cuda-mps-control` で MPS デーモンを確実に graceful shutdown する. `docker/ros-one.dockerfile` の末尾に `COPY docker/mps-entrypoint.sh`, `RUN chmod +x`, `ENTRYPOINT ["/usr/local/bin/mps-entrypoint.sh"]` を追加した. 既存の `CMD ["bash"]` は維持しており, entrypoint 経由でラップする形にした.
+
+当初は exec で CMD を PID1 化しつつ trap でシグナルを処理する設計を想定していたが, exec はシェルプロセス自体を置換し trap を破棄するため両立しないと判明した. これを受けて標準的な「CMD をバックグラウンド実行して `wait` し, trap でシグナルを転送する」方式に変更した. これは docker の init ラッパーとして一般的なパターンである.
+
+pipe dir (`/run/nvidia-mps`) はコンテナ内部パスであり, bind マウントされている `/tmp:/tmp` の外にあるため, ホスト側の MPS/CUDA プロセスと衝突しない設計である.
+
+Docker の実ビルド・コンテナ再起動は現在の作業環境を壊すリスクがあるため実施していない. 今回行ったのは静的な構文チェックのみである.
+
+`docker-compose.yml` への `CUDA_MPS_PIPE_DIRECTORY`/`CUDA_MPS_LOG_DIRECTORY` 環境変数追加も本来必要だが, これは保留とした. 理由は, 同ファイルには直近コミット (`e243645`) 以降にユーザー自身の未コミット変更 (hf_cache volume 削除, `HF_HOME` 環境変数, Claude Code 関連マウント設定) が既に存在しており, 今回の MPS 変更が同じワーキングツリー上で混在してしまうためである. `docker-compose.yml` の扱いはユーザーが別途指示する.
+
+## 2026-07-03 (続き): SAM3 セグメンターのノード分離を統合すべきかの検討 (結論: 保留)
+
+ユーザーから「SAM3 を別ノードにしなくてよいのではないか. 別ノードにしたモチベーションは python バージョン違いによるコンテナ分離のためだったはずだが, 今はコンテナが統合されているし, BundleSDF のオリジナル実装ではセグメンター内蔵を意図していたはずだ」という提案があり検討した.
+
+事実確認の結果, ユーザーの認識は正確だった. コンテナは `f8a0428 feat(docker): fold the SAM3 segmenter into the jammy image` で既に jammy 単一イメージに統合済みである (元々は python3.10 のバージョン競合により別コンテナに分離していた). オリジナルの `run_custom.py` は `segmenter = Segmenter()` を直接インスタンス化し `segmenter.run(...)` を同期呼び出しする「内蔵」設計だった. 一方, 現状は `ros/sam3_segmenter/scripts/sam3_segmenter_node.py` (RGB 受信→マスク publish) と `ros/bundlesdf_node/scripts/bundlesdf_node.py` (`message_filters` で rgb/depth/mask を time-synchronized subscribe, `slop=0.05`) という, ROS トピック経由の別ノード構成のままである.
+
+検討したトレードオフは次のとおりである. 統合に慎重であるべき理由は, 直前のセッションで「SAM3 単体 vs SAM3+Cutie 等の軽量トラッカー」という構成変更の可能性を検討したばかりであり, ノードを1プロセスに統合するとセグメンテーションバックエンドの差し替え可能性 (疎結合性) が失われる点にある. ROS ノード分離が持つ障害分離のメリットも失われる. 統合を支持する理由は, `message_filters` の time-synchronized subscribe (`slop=0.05`) がタイムスタンプのずれによるフレーム取りこぼしのリスクを抱えており, この同期購読の仕組み自体がまだ実地で試されていない点にある. 内蔵化すればこの同期ずれ問題自体が構造的に消える. 折衷案として, 完全な1プロセス統合ではなく「同一プロセス内でセグメンターを関数呼び出しする (同期ずれ問題を解消する) が, セグメンテーション実装はインターフェースとして差し替え可能にしておく」という設計を提案した.
+
+結論として, 実機検証がまだ行われていない段階での判断はリスクが高いため, まず一度実機で動かして実際に同期ずれが問題になるかどうかを見てから, 統合するかどうかを判断する方針とした. 今回は実装 (ノード統合) は行わず, 検討結果の記録のみである.
+
 結論として, BundleSDF 全体は NeRF 同期待ちが壁時計の約50%を占め律速要因であり, セグメンテーション速度 (16fps程度でも十分) は現状ボトルネックになっていない. トラッカー切り替えによる速度差の実務的重要性は低いと判断した. 例外は VRAM 競合緩和の可能性があるが未検証である. 本調査は実装を伴わない調査のみである.
