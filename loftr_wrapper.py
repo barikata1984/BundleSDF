@@ -41,8 +41,15 @@ class LoftrRunner:
 
 
   def _init_eloftr(self):
-    from BundleTrack.EfficientLoFTR.src.loftr import LoFTR, full_default_cfg, reparameter
-    cfg = deepcopy(full_default_cfg)
+    from BundleTrack.EfficientLoFTR.src.loftr import LoFTR, full_default_cfg, opt_default_cfg, reparameter
+    cfg_name = os.environ.get('BUNDLESDF_LOFTR_CFG', 'opt').lower()
+    if cfg_name == 'full':
+      cfg = deepcopy(full_default_cfg)
+    elif cfg_name == 'opt':
+      cfg = deepcopy(opt_default_cfg)
+    else:
+      raise ValueError(f"Unknown BUNDLESDF_LOFTR_CFG {cfg_name!r} (expected 'full' or 'opt')")
+    logging.info(f"eloftr cfg={cfg_name}")
     self.matcher = LoFTR(config=cfg)
     ckpt = f'{code_dir}/BundleTrack/EfficientLoFTR/weights/eloftr_outdoor.ckpt'
     # weights_only=False: trusted local lightning ckpt (PyTorch 2.6+ defaults to True, which rejects it)
