@@ -39,6 +39,7 @@ class Sam3SegmenterNode:
       inference_device=self.device,
       processing_device='cpu',
       video_storage_device=self.device,
+      dtype=self.dtype,
     )
     self.session = self.processor.add_text_prompt(
       inference_session=self.session, text=self.text_prompt)

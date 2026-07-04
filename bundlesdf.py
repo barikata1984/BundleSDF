@@ -648,7 +648,6 @@ class BundleSdf:
 
     with self.prof.span('find_corres_ref'):
       self.find_corres([(frame, ref_frame)])
-    matches = self.bundler._fm._matches[(frame, ref_frame)]
 
     if frame._status==my_cpp.Frame.FAIL:
       logging.info(f"find corres fail, mark {frame._id_str} as FAIL")

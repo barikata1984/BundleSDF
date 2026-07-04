@@ -900,8 +900,9 @@ class NerfRunner:
         return uvs
 
       def kpts_to_ray_ids(kpts,id,dilate=True):
-        cur_frame_mask = (self.rays[:,self.ray_frame_id_slice]==id).data.cpu().numpy()
-        cur_rays = self.rays[cur_frame_mask].data.cpu().numpy()
+        cur_frame_mask_gpu = self.rays[:,self.ray_frame_id_slice]==id
+        cur_rays = self.rays[cur_frame_mask_gpu].data.cpu().numpy()
+        cur_frame_mask = cur_frame_mask_gpu.data.cpu().numpy()
         uvs = dirs_to_uvs(cur_rays[:,:3])   #(N,2)
         kdtree = cKDTree(uvs)
         if dilate:
