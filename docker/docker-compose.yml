@@ -15,18 +15,47 @@ services:
       - seccomp:unconfined
     environment:
       - NVIDIA_DISABLE_REQUIRE=1
+      # CUDA MPS: pipe/log dir must be visible to every `docker exec` session
+      # (not just the entrypoint), so set it here. /run is container-internal
+      # (not the bind-mounted /tmp), avoiding host MPS collisions.
+      - CUDA_MPS_PIPE_DIRECTORY=/run/nvidia-mps
+      - CUDA_MPS_LOG_DIRECTORY=/run/nvidia-mps
       # ROS One / cross-container networking (both containers use
       # network_mode: host, so loopback is shared -- see notes/LOGS).
       - ROS_MASTER_URI=http://127.0.0.1:11311
       - ROS_IP=127.0.0.1
       - DISPLAY=${DISPLAY}
       - GIT_INDEX_FILE
+      # Reuse the host HF cache (already holds facebook/sam3, ~18GB) instead
+      # of downloading into a fresh volume. /home is already bind-mounted
+      # below, so this just repoints HF_HOME (set to /hf_cache in
+      # ros-one.dockerfile) at the real path -- no extra mount needed.
+      - HF_HOME=${HOME}/.cache/huggingface
     volumes:
       - ..:/workspace
       - /home:/home
       - /tmp:/tmp
       - /mnt:/mnt
-      - hf_cache:/hf_cache
+
+      # Claude Code: share user-level config; auth stays per-container;
+      # session history persists across rebuild via the 4 mounts below.
+      # ros-one.dockerfile has no non-root user, so target /root/.claude.
+      - ${HOME}/.claude/CLAUDE.md:/root/.claude/CLAUDE.md
+      - ${HOME}/.claude/skills:/root/.claude/skills
+      - ${HOME}/.claude/agents:/root/.claude/agents
+      - ${HOME}/.claude/plugins:/root/.claude/plugins
+      - ${HOME}/.claude/hooks:/root/.claude/hooks
+      - ${HOME}/.claude/settings.json:/root/.claude/settings.json
+      - ${HOME}/.claude/keybindings.json:/root/.claude/keybindings.json
+      - ${HOME}/.claude/rules:/root/.claude/rules
+      - ${HOME}/.claude/output-styles:/root/.claude/output-styles
+
+      # Claude Code session history (survives rebuild).
+      # Host layout: ~/.claude-stacks/bundlesdf/{projects,sessions,todos,shell-snapshots}
+      - ${HOME}/.claude-stacks/bundlesdf/projects:/root/.claude/projects
+      - ${HOME}/.claude-stacks/bundlesdf/sessions:/root/.claude/sessions
+      - ${HOME}/.claude-stacks/bundlesdf/todos:/root/.claude/todos
+      - ${HOME}/.claude-stacks/bundlesdf/shell-snapshots:/root/.claude/shell-snapshots
     working_dir: /workspace
     deploy:
       resources:
@@ -38,6 +67,3 @@ services:
     stdin_open: true
     tty: true
     command: sleep infinity
-
-volumes:
-  hf_cache:
