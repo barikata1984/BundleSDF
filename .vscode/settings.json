@@ -133,5 +133,6 @@
     "__mutex_base": "cpp",
     "__node_handle": "cpp",
     "locale": "cpp"
-  }
+  },
+  "cmake.ignoreCMakeListsMissing": true
 }
