@@ -122,5 +122,10 @@ RUN imageio_download_bin freeimage || true
 # Source ROS One in interactive shells
 RUN echo "source /opt/ros/one/setup.bash" >> /root/.bashrc
 
+# CUDA MPS: start the control daemon before CMD, quit it gracefully on stop.
+COPY docker/mps-entrypoint.sh /usr/local/bin/mps-entrypoint.sh
+RUN chmod +x /usr/local/bin/mps-entrypoint.sh
+
 WORKDIR /home
+ENTRYPOINT ["/usr/local/bin/mps-entrypoint.sh"]
 CMD ["bash"]
