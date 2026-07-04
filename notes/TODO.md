@@ -14,6 +14,12 @@
 - [x] コンテナ内実行時検証: `bash build.sh` のビルドエラー4件 (mycuda pyproject.toml の torch pin, Utils.h テンプレート推論, FeatureManager.cpp の pcl/common/geometry.h include 追加, loftr_wrapper.py の torch.load weights_only 対応) を修正しビルド成功を確認
 - [x] 上記ビルド修正後: my_cpp import 成功, eloftr/loftr 実マッチング動作確認, `scripts/bench_milk.sh` 実行 (ミルクベンチ全1932フレーム, eloftr/loftr 双方エラーゼロで完走)
 
+## 完了 (2026-07-04 追加)
+
+- [x] REVIEW_findings.md #10 (`sam3_segmenter_node.py` の `init_video_session` に dtype 未指定) の修正. `init_video_session` 呼び出しに `dtype=self.dtype` を追加し, モデルの bf16 設定とセッション状態の dtype 不一致を解消した. 実機検証 (ROS 実機が必要) は未実施
+- [x] cleanup 系 2 件の修正 (`REVIEW_findings.md` 記載分, 3 件目は見送り): `nerf_runner.py:900-902` の `kpts_to_ray_ids` 重複 GPU→CPU 転送を修正 (マスクを GPU 上に保持したままインデックスし, CPU 変換を 1 回に削減), `bundlesdf.py:651` の死んだ代入を削除 (直後未使用のまま 658 行目で再代入されていた)
+- [ ] (見送り) `run_nerf`/`run_global_nerf` の約 150 行重複統合. マルチプロセスワーカーとインスタンスメソッドで実質分岐しており, 無理な統合はリスクが高いと判断し見送った
+
 ## 未完了
 
 - [ ] コンテナ (`ros-one.dockerfile`, SAM3 統合済み単一イメージ) の GHCR push (`segmenter.dockerfile` は py3.10 統合により廃止)

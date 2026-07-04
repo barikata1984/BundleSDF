@@ -17,7 +17,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 | 7 | `bundlesdf.py:727` | CONFIRMED | **修正済み** (bundlesdf.py:762-767, 本セッション) | NeRF 同期待ちが子プロセスの死活を未確認 | 子が CUDA OOM 死 → 親が無限待機. `sync_max_delay` 変更後も残存 |
 | 8 | `BundleTrack/src/Bundler.cpp:901` | CONFIRMED | **修正済み** (本セッション) | 対応点ゼロで FAIL を立てるが return せず, ゼロ対応点のまま最適化続行し姿勢を無条件書き戻し (953-957) | global_corres 空のフレームで無意味な姿勢に上書き → 後続へ伝播 |
 | 9 | `docker/ros-one.dockerfile:38` | CONFIRMED | **修正済み** (cc36ede) | 手編集の `-DCUDA_ARC_BIN` typo + `BUILD_LIST` 削除 | cmake が未知 -D を無視 → 全アーキ×全モジュールのフルビルドに静かに退行. ※疑われた行継続破壊は実 docker build で再現せず (Docker はコメント行を結合前に除去) |
-| 10 | `ros/sam3_segmenter/scripts/sam3_segmenter_node.py:38` | CONFIRMED | 未修正 (別途 video_storage_device は Tier0 で対応) | `init_video_session` に dtype 未指定 (モデルは bf16) | セッションが fp32 のまま dtype 不一致 or bf16 効果無効 |
+| 10 | `ros/sam3_segmenter/scripts/sam3_segmenter_node.py:38` | CONFIRMED | **修正済み** (2026-07-04, 未コミット) | `init_video_session` に dtype 未指定 (モデルは bf16) | セッションが fp32 のまま dtype 不一致 or bf16 効果無効. `init_video_session` 呼び出しに `dtype=self.dtype` を追加して修正. 実機検証 (ROS 実機が必要) は未実施 |
 
 ## 圏外の生存候補 (10 件制限でカット, 修正価値あり)
 
@@ -38,7 +38,7 @@ feat/ros-one-online のコードベース全体レビュー結果. 参照・更�
 | `build.sh:4` | PLAUSIBLE | torch パス解決失敗時のエラーハンドリングなし (空文字で続行) |
 | `sam3_segmenter_node.py:49` | CONFIRMED | `buff_size=2^24` が 4K rgb8 (約 25MB) より小さい |
 | `loftr_wrapper.py:83` | PLAUSIBLE | **修正済み** (本セッション, `shape[-1]==3`→`shape[1]==3` に修正). permute 後に `shape[-1]==3` を見ておりチャンネル軸ではなく幅を参照していたグレースケール判定. 実運用 (`USE_GRAY:true`) では C++ 側で事前にグレースケール変換済みのため発火しないが, 3ch RGB を直接渡す経路では `RuntimeError` を起こすことを実地で確認 |
-| cleanup 系 4 件 | CONFIRMED/PLAUSIBLE | 二重 `no_grad` (loftr_wrapper, **修正済み** 2026-07-03) / `kpts_to_ray_ids` の重複 GPU→CPU 転送 (未修正) / `run_nerf`/`run_global_nerf` の約 150 行重複 (未修正) / 死んだ代入 `bundlesdf.py:590` (未修正) |
+| cleanup 系 4 件 | CONFIRMED/PLAUSIBLE | 二重 `no_grad` (loftr_wrapper, **修正済み** 2026-07-03) / `kpts_to_ray_ids` の重複 GPU→CPU 転送 (`nerf_runner.py:900-902`, **修正済み** 2026-07-04, マスクを GPU 上に保持したままインデックスし CPU 変換を1回に削減) / `run_nerf`/`run_global_nerf` の約 150 行重複 (2026-07-04 検討, マルチプロセスワーカーとインスタンスメソッドで実質分岐しており統合はリスクが高いため見送り) / 死んだ代入 `bundlesdf.py:651` (**修正済み** 2026-07-04, 直後未使用のまま658行目で再代入されていたため削除) |
 
 ## 検証で棄却された候補 (REFUTED)
 
