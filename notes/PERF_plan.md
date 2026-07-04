@@ -123,16 +123,20 @@ NeRF が休みなく回っている現状では, ラウンド時間の短縮が�
   - **結果** (フル 1932 フレーム, `data/out_milk_eloftr_kfcap/` vs baseline `data/out_milk_eloftr_async/`): 軌跡整合ゲート合格 (回転差 median 0.587° < 基準 1.33°, 並進差 median 0.064cm < 基準 0.16cm. p90 は回転 3.32°/並進 0.55cm, max 回転 31.9°/並進 2.34cm). select_kf は終盤 200 フレーム median 23.9ms→0.578ms (約 41 倍), セッション合計 32.48s→1.27s (-31.2s) に改善し, 区間ごとの推移 (0.012→0.567→0.644→0.578ms) がほぼ横ばいとなり O(N²) 依存が解消されキーフレーム数に依存しなくなったことを確認した. フレーム total median は 139.3ms→129.3ms (-10ms), 終盤 200 フレームでは 155.7ms→138.5ms (-17ms). 壁時計は不変 (kfcap 501s vs async 468.3s) で, これは NeRF 同期待ちが壁時計の 52% を占め律速しているためであり (改善項目1 参照), select_kf 単体の高速化は壁時計に反映されない. VRAM ピークは 27.2GB で baseline (27.7GB) と同等 (この変更は VRAM 単調増加の主因であるキーフレーム蓄積には無関係).
   - **回転差バーストについて**: rot>5° の 168 フレームは大半 (162 件) が idx 1576-1879 に集中しており, これは既知の終盤区間 (低テクスチャ・対称形状のミルクジャグ, モーションブラー起因. eloftr-vs-loftr 対照でも同区間にスパイクが出現する) であり本変更起因ではない.
   - **未コミット**. 生データ: フル出力 `data/out_milk_eloftr_kfcap/`, `data/bench_results/kfcap_frame_times.csv`, `data/bench_results/kfcap_gpu_mem.csv`, 軌跡差 per-frame `scratchpad/kfcap_vs_async.csv`.
-- [ ] **マッチャーの opt 設定への切替** (未着手): eloftr は精度優先の full 設定 + autocast で動いている. 論文の最速値を出している opt 設定 (skip_softmax + fp16matmul) に切り替えると, マッチャー推論 61.4ms に大幅減の余地がある. 確認は軌跡整合から始め, 採用確定は絶対精度まで.
+- [x] **マッチャーの opt 設定への切替** (実施済み・採用決定, 2026-07-03): eloftr は精度優先の full 設定 + autocast で動いていた. 論文の最速値を出している opt 設定 (skip_softmax + fp16matmul) への切替を実装した.
+  - **実装**: `loftr_wrapper.py` の `_init_eloftr` に環境変数 `BUNDLESDF_LOFTR_CFG` (値: full/opt) を追加し, EfficientLoFTR の `opt_default_cfg` (既存差分: `MATCH_COARSE.THR` 0.2→25, `SKIP_SOFTMAX` False→True, `FP16MATMUL` False→True) を使えるようにした.
+  - **結果** (MPS 有効環境, ミルクベンチ+HO3D SM1): 軌跡整合ゲート合格 (回転差 median 0.930° < 基準 1.33°, 並進差 median 0.118cm < 基準 0.16cm). 速度は `loftr_predict_ms` 55.89→52.39ms (-6.3%). ただし `total_ms` は 112.80→116.43ms (+3.2%, NeRF 律速のため段単体の高速化が全体には反映されない). 絶対精度 (HO3D SM1, n=895) は ADD 2.20→1.97cm, ADD-S 0.98→0.915cm, ADD_AUC 78.10→80.34%, ADDS_AUC 90.18→90.87%, chamfer 0.52→0.469cm と, 全指標で opt 設定が full 設定を上回った (速度だけでなく精度も改善).
+  - **優先度変動** (MPS 導入後の再評価, 2026-07-03): MPS が競合律速の処理 (ransac -73%) を削った結果, 計算律速のマッチャー推論 (`loftr_predict`, MPS 下では -7% 止まり) が定常フレームの 49.9% を占める最大チャンクとなり, 本項目の相対的な優先度が上昇した.
+  - **採用**: 既定値を opt に変更し, コミット済み (f0702a5 "perf(matcher): default eloftr to opt config (skip_softmax + fp16matmul)"), push 済み.
 - [x] **転送順の修正** (旧 Tier 2-1, 実装済み・ベンチ確認済み, 2026-07-03): `loftr_wrapper.py:80-81` で `.float()` が `.cuda()` より前にあった (`.permute(0,3,1,2).float().cuda()`) のを `.permute(0,3,1,2).cuda().float()` に変更し, 転送後に float 化するよう修正. **結果**: async フルベンチで `loftr_predict` median 61.95ms→58.98ms (-3.0ms), 見込み (「数 ms」) と一致.
-- [ ] **マッチャー呼び出しの統合** (未着手): 参照フレーム用と局所ペア用でマッチャー推論を 2 回呼んでいる. 1 バッチに統合すれば起動オーバーヘッド分だけ縮む (小). 確認は軌跡整合.
+- [ ] **マッチャー呼び出しの統合** (未着手, 優先度↓): 参照フレーム用と局所ペア用でマッチャー推論を 2 回呼んでいる. 1 バッチに統合すれば起動オーバーヘッド分だけ縮む (小). 確認は軌跡整合. **優先度変動** (MPS 導入後の再評価, 2026-07-03): MPS がカーネル起動オーバーヘッドの競合を既に緩和しており, 統合で削れる固定オーバーヘッド自体が縮小したため優先度を下げた.
 
 次の 2 グループは, 計測により当初の見込みより寄与が小さいとわかったため保留にする.
 旧 Tier 1 と呼んでいた C++ の同期とメモリ確保 (`CUDAImageUtil.cu` の毎フレーム 7 回の `cudaDeviceSynchronize()`, `Frame.cpp:126-132` と `FeatureManager.cpp:1655` の毎フレーム cudaMalloc/cudaFree) は, 該当区間の実測がフレーム構築 4.2ms と RANSAC 14.8ms の内側に収まっており, 単独の大レバーではない.
 旧 Tier 2-2〜2-4 の転送とコピー類 (`bundlesdf.py:511,439,707` の二重コピーと pickle 転送, `FeatureManager.cpp:2330` と `Frame.cpp:28-34` のコピー) も同様に小さい見込みである.
 これらは上位の修正後に再計測し, 残った時間の中で目立つなら着手する.
 
-- [ ] 保留: C++ の同期とメモリ確保 (旧 Tier 1)
+- [ ] 保留: C++ の同期とメモリ確保 (旧 Tier 1, 優先度↓). **優先度変動** (MPS 導入後の再評価, 2026-07-03): ransac 比重が 10.1%→3.2% に激減し, これらの競合コストは既に MPS が吸収済みと判明したため優先度を下げた.
 - [ ] 保留: 転送とコピー類 (旧 Tier 2-2〜2-4)
 
 ## 改善項目 3: 長時間運用で速度を保つ
@@ -140,6 +144,7 @@ NeRF が休みなく回っている現状では, ラウンド時間の短縮が�
 - [x] **VRAM 計測ロジックの実装** (実装済み, 2026-07-03): 既存のベンチコードに VRAM 計測が一切なく, 下記の切り分けが実施不能だったため計測ロジックを追加した. `perf_logger.py` に `_vram_mib()` を追加し, `SpanProfiler.flush()` 時に `vram_alloc_mib` (`torch.cuda.memory_allocated`) と `vram_reserved_mib` (`torch.cuda.memory_reserved`) を CSV 末尾に追記するようにした (`BUNDLESDF_PROFILE=1` 時のみ有効, CUDA 不可時は nan を返し例外を出さない. `perf_main.csv`/`perf_nerf.csv`/`perf_nerf_train.csv` 全てに適用, 既存の timing 列は無変更). `scripts/bench_milk.sh` にも, `nvidia-smi --query-gpu=timestamp,memory.used,memory.total -l 5` を単一プロセスでバックグラウンド起動する `start_gpu_mon`/`stop_gpu_mon` を追加し, `trap EXIT INT TERM` で確実に停止させ, プロセス全体 (メイントラッキング+NeRF ワーカーの合算) の VRAM 推移を `${BACKEND}_gpu_mem.csv` に記録するようにした (最初は while+sleep のポーリング実装だったが, 停止時にゾンビプロセスが残ることを実測で確認し, 単一の `nvidia-smi -l 5` プロセス方式に変更した経緯がある). smoke test (256MiB 確保後に flush) で `vram_alloc_mib=256.0` 等の妥当な値を確認し, 既存の集計ツール `scripts/perf_stats.py` が新しい列があってもクラッシュしないことも確認した. 両ファイルとも未コミット. **注意**: 下記の VRAM 増加の切り分けに使った async フルベンチは, この実装が完成する前後のタイミングで実行されており, `data/out_milk_eloftr_async/perf_main.csv` には実際にはこの列が入っていない (ヘッダで確認済み). フルベンチで実際に列が出力されることの動作確認は次回セッションの課題.
 - [x] **VRAM 増加の切り分け** (1 行修正実装済み・暫定切り分け完了, 2026-07-03): `FeatureManager.cpp:1704-1712` のクリーンアップループに `cutilSafeCall(cudaFree(confs_gpu[i]));` を追加し, `confs_gpu` (`FeatureManager.cpp:1605,1662,1677`, REVIEW_findings #3) の cudaFree 漏れを修正した. `bash build.sh` でリビルドし `my_cpp` の import を確認済み. **結果**: async フルベンチ (save_result 非同期化・転送順修正・本修正の 3 件込み, `data/out_milk_eloftr_async/`) で VRAM 推移を計測したところ 15.6→16.2→16.8→20.6→27.4GB (ピーク 27.7GB) と baseline (17→26GB) と同型の単調増加が継続し, 本修正 (RANSAC ペア単位の小さい確保解放) はマクロな VRAM 曲線には効かず, 主因はキーフレーム蓄積 (終盤 262 keyframes) と判明した. ただしこの計測は上記の正式な VRAM ロギング実装ではなく, bench 実行時に即興で用意した簡易計測 (`data/bench_results/async_vram.csv`, timestamp/memory_used の 2 列のみ) によるものであり, 完全な確証ではない. 正式な計測実装によるフルベンチでの再検証は次回セッションの課題.
 - [ ] **MPS の導入** (旧 Tier 3-2, 未着手): トラッキングと NeRF の 2 プロセスが GPU を時分割で取り合っている. NeRF が飽和稼働のため, 定常フレームの時間にも波及している可能性がある. `nvidia-cuda-mps-control` を有効にする. 確認は軌跡整合.
+  - **新発見** (MPS 有効/無効の既存 perf CSV 再分析, 2026-07-03): 定常フレームの計算自体が MPS で約16ms速くなることが判明した (`data/out_milk_eloftr_kfcap/` vs `data/out_milk_eloftr_mps/`). 以前は「select_kf 等の絶対値は MPS 有無で変わらない」と前提していたが, これは誤りだった. 内訳: ransac 13.10→3.56ms (-73%), find_corres_local 67.52→53.54ms (-21%), loftr_predict 60.18→55.89ms (-7%), select_kf 0.57→0.39ms (-33%). ransac 等の競合律速の処理ほど MPS の効きが大きく, loftr_predict のような計算律速の処理では効きが小さいという非対称性があり, これが上記「マッチャーの opt 設定への切替」の優先度上昇の根拠になっている.
 - [x] **小物の掃除** (旧 Tier 3-3, 実装済み, 2026-07-03): 各 1 行の修正 4 件を実施した. 確認不要.
   - `astype(bool)` の冗長コピー: `ros/sam3_segmenter/scripts/sam3_segmenter_node.py:56` を `masks.to('cpu').numpy().astype(bool, copy=False)` に変更.
   - f-string ログの即時評価: `bundlesdf.py` の毎フレーム経路にある f-string `logging.info` 3 件 (`process frame`, `processNewFrame start/done`, いずれも `process_new_frame`/`run` から毎フレーム無条件に呼ばれることを確認) を `%`-style の遅延評価に変更.
@@ -159,10 +164,10 @@ NeRF が休みなく回っている現状では, ラウンド時間の短縮が�
 5. [x] NeRF 子プロセス死活の修正 (待ちループのバグ修正)
    [x] 同期ポリシー自体の見直し: `sync_max_delay` 拡大 (3→6/10) を検証 — 速度は大きく向上 (fps 4.11→7.02) するが HO3D 絶対精度が単調悪化 (ADD +0.43〜0.54cm) するため既定採用は不採用と判断 (改善項目1 参照)
    [ ] 待ちの非ブロック化 (もう一方のアプローチ, 未実装) — 精度劣化の根本原因は残るため次回以降の検討課題, MPS 導入 (改善項目3) が本質的解決に近い
-6. [ ] マッチャーの opt 設定への切替
+6. [x] マッチャーの opt 設定への切替 — 実装済み・採用決定 (改善項目2 参照, 2026-07-03). MPS 導入後の再評価で優先度が上昇し先行実施した. 軌跡整合ゲート合格, HO3D SM1 で全4指標 (ADD/ADD-S/ADD_AUC/ADDS_AUC) が opt 設定で full 設定を上回り, 既定値を opt に変更してコミット (f0702a5) 済み
 7. [x] 学習反復数の削減, または前ラウンドの重みの引き継ぎ — 実装済み・採用決定 (改善項目1 参照). 壁時計 −26.6% を確認. 軌跡整合ゲートは回転側で不合格だったが, ユーザーが速度優先で許容し採用を決定 (2026-07-03). HO3D による絶対精度確認は必須条件ではなく任意の確認事項
    [x] 小物の掃除 (`astype(bool)` 冗長コピー, f-string ログ, 対応点分割の線形走査, 二重 `no_grad`, 転送順の修正) — 各 1 行修正を実装済み (改善項目2・3 参照). 確認不要のためベンチ未実施
-8. [ ] 保留項目のうち, 再計測で寄与が確認できたもの
+8. [ ] 保留項目のうち, 再計測で寄与が確認できたもの — MPS 導入後の再評価 (2026-07-03) で優先度は低下 (ransac 比重が競合律速から外れ, 該当コストは既に MPS が吸収済みと判明). 着手は見送り
 
 上記の実施順は当初の効果見込みに基づく優先順位だが, 実際には 7 (学習反復数削減) を先行して実施し, 壁時計 −26.6% を確認した.
 2 (ランナー再構築の廃止) はフルスケールでは見込んでいた効果が出なかったため, 1〜6 の残りは見込みを再検証してから着手する必要がある.

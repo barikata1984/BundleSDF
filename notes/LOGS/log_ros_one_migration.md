@@ -471,3 +471,69 @@ else:
 2. 既存の実運用パス (1 チャンネルグレースケール入力, `USE_GRAY:true` 相当) が引き続き正常動作することも確認した (乱数画像で 4256 マッチを正しく検出, 挙動に変化なし).
 
 未コミットである. なお, 実運用パスでは発火しないと判明したことから, このバグ自体の緊急性は低かった (次回セッションでの優先度判断の参考情報として記録する).
+
+## 2026-07-03 (続き): notes の誤り再訂正 — SAM3 重み配置は完了済みだった
+
+上記の SAM3 統合イメージ検証時, `find / -iname "*sam3*checkpoint*"` 等のファイル名検索で該当がなかったことから「SAM3 の重みは未配置」と判断し, TODO.md にもその旨を記載した。
+
+ユーザーからの指摘 (「HF キャッシュにあるのでは?」) を受けて `$HF_HOME` (`/home/ak/.cache/huggingface`) を直接確認したところ, `hub/models--facebook--sam3/` に `model.safetensors` (3.3GB, 2026-05-07 取得) と `sam3.pt` が実在した。先の検索が失敗していたのは, ファイル名パターンの想定 (`*sam3*checkpoint*` 等) が誤っており, HF キャッシュの実際の構造 (ディレクトリ名にのみ `sam3` を含み, 実体ファイルは `model.safetensors` という汎用名で `blobs/` 配下にハッシュ名で格納される) を見落としていたためだった。
+
+`python3 -c "from transformers import Sam3VideoModel; Sam3VideoModel.from_pretrained('facebook/sam3')"` を実行し, 1797 個の重みテンソルが 1.5 秒でロードされ (dtype float32), 実際に使用可能な状態であることを確認した。
+
+これにより, `bundlesdf_node`/`sam3_segmenter` の実機検証に対するブロッカー (コンテナビルド, `Sam3VideoModel` import, 重み配置の3点) はすべて解消されていたことが判明した。TODO.md の該当項目を `[x]` に訂正した。
+
+教訓: ファイルの存在確認は, 想定するファイル名パターンでの `find` だけに頼らず, 該当するキャッシュ/配置ディレクトリ (今回は `$HF_HOME`) を直接確認する方が確実である。
+
+## 2026-07-03 (続き): MPS 導入後の全9改善項目の再評価
+
+`notes/PERF_plan.md` の各改善項目 (ランナー再構築の廃止, warm-start, キーフレーム走査上限設定, 同期ポリシー, マッチャーの opt 設定切替, 同期ポリシーの非ブロック化, マッチャー呼び出しの統合, MPS 恒久化, 保留項目) について, MPS 有効/無効 (`data/out_milk_eloftr_kfcap/` vs `data/out_milk_eloftr_mps/`) の既存 perf CSV を再分析し, 判断が変わるか検証した. 新規 GPU 実行は行わず, 既存データの再分析のみである. 分析スクリプトは `scratchpad/analyze.py`/`analyze2.py` (未コミット, scratchpad のため git 対象外).
+
+結論として, 判断が確定的に変わった項目はゼロだった (全ての既存の採否判断は MPS 下でも維持された). ただし優先度が変動した項目がある.
+
+- **マッチャーの opt 設定切替は優先度が上昇した**. MPS が競合律速の処理 (ransac -73%) を削った結果, 計算律速のマッチャー推論 (`loftr_predict`, MPS では -7% 止まり) が定常フレームの 49.9% を占める最大チャンクになったためである.
+- **マッチャー呼び出しの統合は優先度が低下した**. MPS がカーネル起動オーバーヘッドの競合を既に緩和しており, 統合で削れる固定オーバーヘッド自体が縮小したためである.
+- **保留項目 (旧 Tier1: C++ 同期・メモリ確保等) は優先度が低下した**. ransac 比重が 10.1%→3.2% に激減し, これらの競合コストは既に MPS が吸収済みと判明したためである.
+- **同期ポリシーの非ブロック化は判断変化なし**. `nerf_wait` 比率は 46.3%→45.1% とほぼ不変だった. MPS は NeRF ラウンドとトラッキング定常処理をほぼ比例して速くしたため待ち比率自体は動かず, 非ブロック化は `sync_max_delay` 拡大と同じ精度トレードオフを負うため, 判断は変わらない.
+- **ランナー再構築の廃止は判断変化なし**. `runner_build` median は 901.9→803.7ms (-11%) で多少速くなったが, 大半が octree/ray 再構築という構造的コストで reuse 不可であり, 廃止しても効果薄という結論は不変である.
+
+新たな重要発見として, 定常フレームの計算自体が MPS で約16ms速くなることが判明した (定常フレーム median 112.8ms 中. 以前は「select_kf 等の絶対値は MPS 有無で変わらない」と誤って前提していたが, これは誤りだった). 内訳: ransac 13.10→3.56ms (-73%), find_corres_local 67.52→53.54ms (-21%), loftr_predict 60.18→55.89ms (-7%), select_kf 0.57→0.39ms (-33%). 競合律速の処理ほど MPS の効きが大きく, 計算律速の処理では効きが小さいという非対称性があり, これがマッチャー opt 設定切替の優先度上昇の根拠になっている.
+
+詳細な優先度変動と実施状況は `notes/PERF_plan.md`, 完了サマリーは `notes/TODO.md` を参照.
+
+## 2026-07-03 (続き): delay-精度トレードオフスイープの完走と方針転換による中断
+
+`notes/PLAN_delay_accuracy_sweep.md` の計画に基づき, AP10 (`pitcher_base`)・MPM10 (`potted_meat_can`)・SB11 (`bleach_cleanser`) の3動画 (いずれも MPS 有効環境) で確定グリッド delay=3, 4, 5, 6, 7, 8, 10, 15 の8点を実行し, 全24回のスイープを完走した.
+
+結果, SM1 の sync_max_delay 検証で見られた「delay 拡大で単調に劣化する」パターンは3動画とも再現せず, 非単調な変動が見られた (AP10 では delay=3 が最悪, MPM10 では delay=15 が最良等). この非単調性が実行ノイズでなく再現性のある効果であることを確認するため, AP10 の delay=3, 4 を再実行したところ, 初回 ADD 2.900cm/1.696cm に対し再実行では 2.718cm/1.841cm となり, 方向性 (delay=3 の方が悪い) と大きさの両方が再現された.
+
+この結果を受け, SM1 自体を MPS 有効環境・同一グリッドで再検証するタスク (`sm1-mps-sweep-verify`) を開始したが, ユーザー判断により中断した. 理由は, 3〜4動画のデータだけでは傾向 (単調/非単調) が確定できないため, いずれ13動画全部で網羅的なスイープを行う予定であり, それなら他の改善項目 (マッチャーの opt 設定切替等) を全部実装し終えた最終構成で1回のスイープにまとめる方が効率的という方針転換である.
+
+中断作業中, バックグラウンドプロセスの停止に手間取る教訓を得た. Agent ツールで起動したエージェントを `TaskStop` で止めても, エージェントがバックグラウンドでデタッチして起動したシェルスクリプト本体は独立して生き残り続ける (PID1 の子として孤立する). 実際に `config.yml` が delay=10 まで書き換わり新しい `run_ho3d.py` が起動してしまったため, プロセスツリーを `ps -ef --forest` で辿って直接 kill する必要があった. 最終的に GPU・プロセス・`config.yml` ともにクリーンな状態に復元済みである (`config.yml` は `sync_max_delay=3`, git diff なし).
+
+生データは保持している: `data/bench_results/ho3d_sweep/` (AP10/MPM10/SB11 各8delay点, 24回分の完全な delay-精度データ), `scratchpad/kfcap_vs_sync6.csv` 等. 方針転換の詳細と将来の網羅的スイープへの活用方針は `notes/PLAN_delay_accuracy_sweep.md` を参照.
+
+## 2026-07-03 (続き): マッチャーの opt 設定切替の実施と採用
+
+`notes/PERF_plan.md` 改善項目2「マッチャーの opt 設定への切替」を実施した. `loftr_wrapper.py` の `_init_eloftr` に環境変数 `BUNDLESDF_LOFTR_CFG` (値: full/opt) を追加し, EfficientLoFTR の `opt_default_cfg` (既存差分: `MATCH_COARSE.THR` 0.2→25, `SKIP_SOFTMAX` False→True, `FP16MATMUL` False→True) を使えるようにした.
+
+検証 (MPS 有効環境, ミルクベンチ+HO3D SM1) の結果は次のとおりである.
+
+- 軌跡整合: 回転差 median 0.930° (基準1.33°未満), 並進差 median 0.118cm (基準0.16cm未満) で合格.
+- 速度: `loftr_predict_ms` 55.89→52.39ms (-6.3%). ただし `total_ms` は 112.80→116.43ms (+3.2%, NeRF 律速のため段単体の高速化が全体には反映されない).
+- 絶対精度 (HO3D SM1, n=895): ADD 2.20→1.97cm, ADD-S 0.98→0.915cm, ADD_AUC 78.10→80.34%, ADDS_AUC 90.18→90.87%, chamfer 0.52→0.469cm. 全指標で opt 設定が full 設定を上回った (速度だけでなく精度も改善).
+
+既定値を opt に変更して採用を決定し, コミット済み (f0702a5 "perf(matcher): default eloftr to opt config (skip_softmax + fp16matmul)"), push 済みである.
+
+## 2026-07-03 (続き): SAM3 単体トラッキング vs SAM3+SOTAトラッキングの速度調査
+
+`ros/sam3_segmenter/scripts/sam3_segmenter_node.py` が既に SAM3 の video tracking API (memory 機構, `init_video_session`/`add_text_prompt`/session 経由の frame 処理) を使っており, 毎フレーム独立推論ではないことを確認した.
+
+外部情報調査 (一次情報で検証済み) の結果は次のとおりである.
+
+- SAM3 (動画): 16fps (H100). 出典: Meta ブログ (https://ai.meta.com/blog/segment-anything-model-3/).
+- SAM3.1 (動画): 32fps (H100, object multiplex で最大16物体/forward pass). 同上出典.
+- Cutie-small: 45.5fps, Cutie-base: 36.4fps, XMem: 22.6fps, DeAOT-R50: 11.7fps. いずれも V100. 出典: Cutie 論文 Table 1 (ar5iv 版 https://ar5iv.labs.arxiv.org/html/2310.12982).
+
+GPU 世代が揃っていない (Cutie 系は V100, SAM3 系は H100) ため単純比較はできないが, 桁感としては2段構成 (SAM3 で初期マスク→Cutie 等で伝播) の方が定常状態で数倍速いと見積もった.
+
+結論として, BundleSDF 全体は NeRF 同期待ちが壁時計の約50%を占め律速要因であり, セグメンテーション速度 (16fps程度でも十分) は現状ボトルネックになっていない. トラッカー切り替えによる速度差の実務的重要性は低いと判断した. 例外は VRAM 競合緩和の可能性があるが未検証である. 本調査は実装を伴わない調査のみである.
