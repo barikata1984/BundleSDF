@@ -46,6 +46,7 @@ RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
     tmux \
     wget \
     curl \
+    jq \
     bzip2 \
     ca-certificates \
     gnupg \
