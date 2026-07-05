@@ -7,6 +7,9 @@ exp/
 # C extensions
 *.so
 BundleTrack/build
+
+# catkin workspace (local build artifacts, src is a symlink to ros/)
+catkin_ws/
 # Distribution / packaging
 .Python
 build/

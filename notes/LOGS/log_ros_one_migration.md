@@ -571,3 +571,28 @@ cleanup 系の残り3件のうち2件を修正した. `nerf_runner.py:900-902` �
 残り1件 (`run_nerf`/`run_global_nerf` の約150行重複) は見送った. 一方はマルチプロセスワーカー関数, 他方はインスタンスメソッドであり実質的な分岐点があるため, 無理な統合はリスクが高いと判断した.
 
 `notes/REVIEW_findings.md`/`notes/TODO.md` を更新済み. コミットはしていない.
+## 2026-07-05: catkin ビルド検証, モックカメラストリーム実装, object_pose publish バグの FTA 修正
+
+### catkin ビルドの実施・検証
+
+`ros/bundlesdf_node`/`ros/sam3_segmenter` は catkin パッケージとして定義されていたが, 実際に `catkin build`/`catkin_make` されたことが一度もなく, `roslaunch` でパッケージ名を解決できるかは未検証だった. `/workspace/catkin_ws` を新規作成し (`src` を `/workspace/ros` へのシンボリックリンクとして作成, `.gitignore` に追加済みで追跡対象外), `catkin_make` を実行した. `rospack find bundlesdf_node`/`rospack find sam3_segmenter` が正しく解決できることを確認した. なお catkin_make が実ソースツリー内 (`ros/CMakeLists.txt`) に環境依存のシンボリックリンクを誤って作成していたことに気づき, これは削除した (コミット対象から除外済み).
+
+### モックカメラストリームノードの新規実装
+
+実カメラなしで `bundlesdf_node.py` を検証するため, `ros/bundlesdf_node/scripts/mock_camera_stream.py` を新規実装した. 既存のミルクデモ録画データ (`data/2022-11-18-15-10-24_milk/`, rgb/depth/masks 各1932枚 + `cam_K.txt`) を読み込み, `bundlesdf_node.launch` のデフォルト remap 先と同じトピック名 (`/d455_1/color/image_rect` 等) に, `decode_bgr`/`decode_depth`/`decode_mask` が期待するエンコーディング (`bgr8`/`16UC1`/`mono8`) で配信する. `ApproximateTimeSynchronizer` (slop=0.05) に噛み合うよう, 全フレームで同一 stamp を付与する設計にした.
+
+### 実行時バグの発見と FTA による根本原因の確定
+
+上記のモックストリームを使い, 実際に `bundlesdf_node` を起動して動作検証したところ, `~object_pose` トピックへの publish が100%決定的に失敗することが判明した (10フレーム×2回, 100フレーム×2回, 計172フレーム超で毎回再現).
+
+Fault Tree Analysis で根本原因を確定した. `bundlesdf_node.py` の `on_frame()` (修正前の145-151行目) は `tracker.run()` 呼び出し直後に `os.path.exists(f'{debug_dir}/ob_in_cam/{id_str}.txt')` をチェックしていたが, 実際のファイル書き込みを行う `bundlesdf.py` 側の `saveNewframeResult()` は性能改善コミット `e894df9` (2026-07-03) でバックグラウンドスレッドへの非同期キューイングに変更されており, その完了保証 (`self._save_result_queue.join()`, `bundlesdf.py:607`) は次フレームの `process_new_frame()` 冒頭でしか行われない. `bundlesdf_node.py` は1フレーム1コールバックで完結する構造のため, この完了保証が成立する前に必ずファイル存在チェックを行ってしまう. `bundlesdf_node.py` (コミット `e243645`) は非同期化コミット (`e894df9`) の約4.5時間前に書かれており, 後から入った性能改善が前提としていたファイル完了保証を壊した形になる.
+
+修正は, ファイルへの書き込み・存在チェック・読み込みという迂回を廃止し, `run()` が返った時点で同期的に更新済みの `self.tracker.bundler._newframe._pose_in_model` をメモリから直接読むよう変更した. GUI モード用のコードパス (`bundlesdf.py:864,868`) が既に同じパターン (`np.linalg.inv(frame._pose_in_model)` をメモリから直接読む) を使っていたことから着想を得た. 修正後, 20フレームのモックストリームで19/19フレームが実際に `PoseStamped` を publish し, `produced no pose` 警告は0件になったことをライブ検証で確認した. この修正は `ros/bundlesdf_node/scripts/bundlesdf_node.py` に対する変更であり, 既に作業ツリーに反映されている (コミットは別途行う).
+
+### 副次的に発見した未解決の問題
+
+上記の100フレーム検証中, 処理された74フレーム中40フレームで BundleTrack 内部のトラッキング喪失 (`_cloud_down points#: 0 too small ... mark as FAIL`) が発生していた. これは publish バグとは無関係な別問題であり, ミルクデモのモックデータ特有の追跡品質の問題である可能性がある. 原因は本セッションでは未調査のまま `notes/ISSUES.md` に新規追加した.
+
+### 未検証事項
+
+上記は全て録画データのモック配信による検証であり, 実際のカメラハードウェア (osx 側) からのライブストリームでの検証はまだ行っていない.

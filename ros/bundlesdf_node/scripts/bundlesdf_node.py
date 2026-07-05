@@ -142,12 +142,7 @@ class BundleSdfNode:
 
     self.tracker.run(color, depth, self.K, id_str, mask=mask, occ_mask=None, pose_in_model=np.eye(4))
 
-    pose_file = f'{self.debug_dir}/ob_in_cam/{id_str}.txt'
-    if not os.path.exists(pose_file):
-      rospy.logwarn('frame %s produced no pose (tracker.run did not reach save), skipping publish', id_str)
-      return
-
-    ob_in_cam = np.loadtxt(pose_file).reshape(4, 4)
+    ob_in_cam = np.linalg.inv(self.tracker.bundler._newframe._pose_in_model)
     self.publish_pose(ob_in_cam, rgb_msg.header)
 
   def publish_pose(self, ob_in_cam, header):
