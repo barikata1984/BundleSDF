@@ -46,6 +46,7 @@ services:
       - ${HOME}/.claude/plugins:/root/.claude/plugins
       - ${HOME}/.claude/hooks:/root/.claude/hooks
       - ${HOME}/.claude/settings.json:/root/.claude/settings.json
+      - ${HOME}/.claude/statusline-command.sh:/root/.claude/statusline-command.sh
       - ${HOME}/.claude/keybindings.json:/root/.claude/keybindings.json
       - ${HOME}/.claude/rules:/root/.claude/rules
       - ${HOME}/.claude/output-styles:/root/.claude/output-styles
