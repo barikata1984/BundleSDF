@@ -1,5 +1,5 @@
 <launch>
-  <arg name="camera_config" default="$(find bundlesdf_node)/config/camera_input.yaml" />
+  <arg name="camera_config" default="$(find bundlesdf)/config/camera_input.yaml" />
   <arg name="target_frame" default="tracked_object" />
   <arg name="out_folder" default="/tmp/bundlesdf_online" />
   <arg name="debug_level" default="1" />
@@ -7,7 +7,7 @@
 
   <rosparam file="$(arg camera_config)" command="load" ns="camera_input" />
 
-  <node pkg="bundlesdf_node" type="bundlesdf_node.py" name="bundlesdf_node"
+  <node pkg="bundlesdf" type="bundlesdf_node.py" name="bundlesdf_node"
         output="screen">
     <param name="target_frame" value="$(arg target_frame)" />
     <param name="out_folder" value="$(arg out_folder)" />

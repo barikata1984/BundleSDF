@@ -14,7 +14,7 @@ by the mask topic below.
 ## Topic contract
 
 Input/output topic names come from the shared `camera_input.yaml` in the
-`bundlesdf_node` package (loaded under `/camera_input`), so the RGB stream and
+`bundlesdf` package (loaded under `/camera_input`), so the RGB stream and
 mask topic are defined in one place for both nodes.
 
 | Direction | Topic | Config key / default | Type | Notes |
@@ -42,7 +42,7 @@ Contract details (frozen with the interface hub):
 | Param | Type | Default | Meaning |
 |-------|------|---------|---------|
 | `~text_prompt` | string | (required) | Initial SAM 3 concept prompt, e.g. `"a red mug"`. May be re-entered at the confirmation gate (see below). |
-| `camera_config` | string | `$(find bundlesdf_node)/config/camera_input.yaml` | YAML of input/output topic names, loaded under `/camera_input`. |
+| `camera_config` | string | `$(find bundlesdf)/config/camera_input.yaml` | YAML of input/output topic names, loaded under `/camera_input`. |
 | `~model_id` | string | `facebook/sam3` | Hugging Face model id. |
 | `~check_segmentation` | bool | `true` | Show the debug window and gate mask publishing on user confirmation. Set `false` to publish immediately (legacy behavior). |
 
@@ -95,7 +95,7 @@ roslaunch sam3_segmenter sam3_segmenter.launch \
 ```
 
 The input RGB and output mask topics come from `camera_input.yaml` (see the
-`bundlesdf_node` README). Point `camera_config` at another YAML to override:
+`bundlesdf` README). Point `camera_config` at another YAML to override:
 
 ```bash
 roslaunch sam3_segmenter sam3_segmenter.launch \

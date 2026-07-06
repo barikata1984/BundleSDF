@@ -1,7 +1,7 @@
 <launch>
   <!-- Text prompt for the object to track (required). -->
   <arg name="text_prompt" default="object" />
-  <arg name="camera_config" default="$(find bundlesdf_node)/config/camera_input.yaml" />
+  <arg name="camera_config" default="$(find bundlesdf)/config/camera_input.yaml" />
   <arg name="model_id" default="facebook/sam3" />
   <arg name="check_segmentation" default="true" />
 

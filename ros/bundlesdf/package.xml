@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>bundlesdf_node</name>
+  <name>bundlesdf</name>
   <version>0.0.1</version>
   <description>Online BundleSDF tracking node. Subscribes time-synchronized
   rgb/depth/mask, runs the tracker per frame, and publishes the tracked

@@ -5,7 +5,7 @@
   <arg name="use_segmenter" default="true" />
   <arg name="target_object" default="object" />
 
-  <arg name="camera_config" default="$(find bundlesdf_node)/config/camera_input.yaml" />
+  <arg name="camera_config" default="$(find bundlesdf)/config/camera_input.yaml" />
   <arg name="target_frame" default="tracked_object" />
   <arg name="out_folder" default="/tmp/bundlesdf_online" />
   <arg name="debug_level" default="1" />
@@ -18,7 +18,7 @@
     <arg name="check_segmentation" value="$(arg check_segmentation)" />
   </include>
 
-  <include file="$(find bundlesdf_node)/launch/bundlesdf_node.launch">
+  <include file="$(find bundlesdf)/launch/bundlesdf_node.launch">
     <arg name="camera_config" value="$(arg camera_config)" />
     <arg name="target_frame" value="$(arg target_frame)" />
     <arg name="out_folder" value="$(arg out_folder)" />

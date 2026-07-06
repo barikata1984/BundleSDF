@@ -58,7 +58,7 @@ Point the launch `camera_config` arg at a different file to switch cameras.
 
 | Param | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `camera_config` | string | `$(find bundlesdf_node)/config/camera_input.yaml` | YAML of input topic names, loaded under `/camera_input`. |
+| `camera_config` | string | `$(find bundlesdf)/config/camera_input.yaml` | YAML of input topic names, loaded under `/camera_input`. |
 | `~target_frame` | string | `tracked_object` | TF child frame id for the published pose. |
 | `~out_folder` | string | `/tmp/bundlesdf_online` | Working dir for tracker debug output (wiped on startup). Poses are read back from `<out_folder>/ob_in_cam/<id_str>.txt`. |
 | `~debug_level` | int | `1` | Forwarded to `BundleTrack`'s `SPDLOG` (higher = more logging/artifacts). |
@@ -70,14 +70,14 @@ Standalone (mask must already be published by something else on the
 `mask_topic` from `camera_input.yaml`):
 
 ```bash
-roslaunch bundlesdf_node bundlesdf_node.launch use_gui:=true
+roslaunch bundlesdf bundlesdf_node.launch use_gui:=true
 ```
 
 Combined with `sam3_segmenter` (both nodes run in this same container --
 `docker/ros-one.dockerfile` bundles SAM 3's deps alongside the tracker):
 
 ```bash
-roslaunch bundlesdf_node bundlesdf.launch \
+roslaunch bundlesdf bundlesdf.launch \
   use_segmenter:=true \
   target_object:="a red mug"
 ```
@@ -85,7 +85,7 @@ roslaunch bundlesdf_node bundlesdf.launch \
 Override the input topics by pointing `camera_config` at another YAML:
 
 ```bash
-roslaunch bundlesdf_node bundlesdf.launch \
+roslaunch bundlesdf bundlesdf.launch \
   camera_config:=/path/to/my_camera.yaml
 ```
 
