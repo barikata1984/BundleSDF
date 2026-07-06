@@ -19,6 +19,11 @@ pybind11 / yaml-cpp from apt.
 - **SAM 3 segmenter ROS node** (`ros/sam3_segmenter/`): text-prompted online
   mask propagation publishing `/sam3/mask`, replacing the XMem gap upstream
   could not ship. See its README for the topic contract and gated weights.
+- **BundleSDF ROS node** (`ros/bundlesdf/`): runs `BundleSdf.run()` online on a
+  time-synchronized rgb/depth/mask stream, publishing the tracked object's
+  6-DoF pose as `~object_pose` (`geometry_msgs/PoseStamped`) and TF. Combined
+  with `sam3_segmenter` via `bundlesdf.launch`; see its README for the topic
+  contract and parameters.
 - **pytorch3d dependency removed**: the three transform functions actually
   used are vendored in `pytorch3d_transforms/`.
 - PCL 1.11+ (std::shared_ptr) compatibility, Blackwell (`sm_120`) CUDA
@@ -28,16 +33,48 @@ pybind11 / yaml-cpp from apt.
 **Build**
 
 ```bash
-docker build -f docker/ros-one.dockerfile -t bundlesdf:ros-one .   # image
-docker run -d --name bundlesdf_bench --gpus all --network=host --ipc=host \
-  -v $(pwd):/workspace -w /workspace bundlesdf:ros-one sleep infinity
-docker exec bundlesdf_bench bash build.sh                          # my_cpp + mycuda
+cd docker && docker compose build
+docker compose up -d
+docker compose exec bundlesdf bash build.sh   # my_cpp + mycuda
 ```
+
+Alternatively, open the repo in VS Code with the Dev Containers extension —
+`.devcontainer/devcontainer.json` points at the same `docker-compose.yml` and
+attaches to the `bundlesdf` service directly.
+
+**ROS node build** (`ros/bundlesdf`, `ros/sam3_segmenter`): these are catkin
+packages and are not committed pre-built. Inside the container:
+
+```bash
+mkdir -p /workspace/catkin_ws/src
+ln -s /workspace/ros/bundlesdf /workspace/catkin_ws/src/bundlesdf
+ln -s /workspace/ros/sam3_segmenter /workspace/catkin_ws/src/sam3_segmenter
+cd /workspace/catkin_ws
+source /opt/ros/one/setup.bash
+catkin_make
+source devel/setup.bash
+```
+
+The container's `.bashrc` auto-sources `catkin_ws/devel/setup.bash` when
+present, so this is a one-time step — later shells pick it up automatically.
+Then launch both nodes together:
+
+```bash
+roslaunch bundlesdf bundlesdf.launch use_segmenter:=true target_object:="a red mug"
+```
+
+`sam3_segmenter` gates mask publishing on a terminal confirmation
+(`Accept segmentation? [y/n]:`) so tracking doesn't start on the wrong object;
+`n` lets you re-enter the text prompt. Pass `use_gui:=true` for BundleSDF's
+live dearpygui viewer. Input topic names are centralized in
+`ros/bundlesdf/config/camera_input.yaml`, overridable via the `camera_config`
+launch arg. See `ros/bundlesdf/README.md` and `ros/sam3_segmenter/README.md`
+for the full topic contract and parameters.
 
 **Benchmark** (milk demo sequence, weights + data per `notes/TODO.md`):
 
 ```bash
-docker exec bundlesdf_bench bash scripts/bench_milk.sh
+docker compose exec bundlesdf bash scripts/bench_milk.sh
 # per-frame timings, pose consistency and logs land in data/bench_results/
 ```
 
