@@ -1,15 +1,16 @@
 <launch>
   <!-- Text prompt for the object to track (required). -->
   <arg name="text_prompt" default="object" />
-  <arg name="image_in" default="/camera/color/image_raw" />
-  <arg name="mask_out" default="/sam3/mask" />
+  <arg name="camera_config" default="$(find bundlesdf_node)/config/camera_input.yaml" />
   <arg name="model_id" default="facebook/sam3" />
+  <arg name="check_segmentation" default="true" />
+
+  <rosparam file="$(arg camera_config)" command="load" ns="camera_input" />
 
   <node pkg="sam3_segmenter" type="sam3_segmenter_node.py" name="sam3_segmenter"
         output="screen">
     <param name="text_prompt" value="$(arg text_prompt)" />
     <param name="model_id" value="$(arg model_id)" />
-    <remap from="~image_in" to="$(arg image_in)" />
-    <remap from="~mask_out" to="$(arg mask_out)" />
+    <param name="check_segmentation" value="$(arg check_segmentation)" />
   </node>
 </launch>

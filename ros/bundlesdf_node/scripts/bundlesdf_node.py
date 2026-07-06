@@ -107,17 +107,24 @@ class BundleSdfNode:
     self.target_frame = rospy.get_param('~target_frame', 'tracked_object')
     self.K = None
 
+    use_gui = rospy.get_param('~use_gui', False)
     rospy.loginfo('loading BundleSdf tracker, debug_dir=%s', self.debug_dir)
     self.tracker = BundleSdf(
-      cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5, use_gui=False)
+      cfg_track_dir=cfg_track_dir, cfg_nerf_dir=cfg_nerf_dir, start_nerf_keyframes=5,
+      use_gui=use_gui)
 
     self.pose_pub = rospy.Publisher('~object_pose', PoseStamped, queue_size=1)
     self.tf_broadcaster = tf2_ros.TransformBroadcaster()
 
-    self.info_sub = rospy.Subscriber('~camera_info_in', CameraInfo, self.on_camera_info, queue_size=1)
-    rgb_sub = message_filters.Subscriber('~rgb_in', Image)
-    depth_sub = message_filters.Subscriber('~depth_in', Image)
-    mask_sub = message_filters.Subscriber('~mask_in', Image)
+    rgb_in = rospy.get_param('/camera_input/rgb_in')
+    depth_in = rospy.get_param('/camera_input/depth_in')
+    camera_info_in = rospy.get_param('/camera_input/camera_info_in')
+    mask_in = rospy.get_param('/camera_input/mask_topic')
+
+    self.info_sub = rospy.Subscriber(camera_info_in, CameraInfo, self.on_camera_info, queue_size=1)
+    rgb_sub = message_filters.Subscriber(rgb_in, Image)
+    depth_sub = message_filters.Subscriber(depth_in, Image)
+    mask_sub = message_filters.Subscriber(mask_in, Image)
     self.sync = message_filters.ApproximateTimeSynchronizer(
       [rgb_sub, depth_sub, mask_sub], queue_size=5, slop=0.05)
     self.sync.registerCallback(self.on_frame)

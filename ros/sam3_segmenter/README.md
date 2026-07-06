@@ -13,10 +13,14 @@ by the mask topic below.
 
 ## Topic contract
 
-| Direction | ROS name (node-relative) | Default remap | Type | Notes |
-|-----------|--------------------------|---------------|------|-------|
-| sub | `~image_in`  | `/camera/color/image_raw` | `sensor_msgs/Image` | encoding `rgb8` or `bgr8` |
-| pub | `~mask_out`  | `/sam3/mask`              | `sensor_msgs/Image` | encoding `mono8`, single channel |
+Input/output topic names come from the shared `camera_input.yaml` in the
+`bundlesdf_node` package (loaded under `/camera_input`), so the RGB stream and
+mask topic are defined in one place for both nodes.
+
+| Direction | Topic | Config key / default | Type | Notes |
+|-----------|-------|----------------------|------|-------|
+| sub | image | `rgb_in` = `/d455_1/color/image_rect` | `sensor_msgs/Image` | encoding `rgb8` or `bgr8` |
+| pub | mask  | `mask_topic` = `/sam3/mask`           | `sensor_msgs/Image` | encoding `mono8`, single channel |
 
 Contract details (frozen with the interface hub):
 
@@ -37,8 +41,26 @@ Contract details (frozen with the interface hub):
 
 | Param | Type | Default | Meaning |
 |-------|------|---------|---------|
-| `~text_prompt` | string | (required) | SAM 3 concept prompt, e.g. `"a red mug"`. |
+| `~text_prompt` | string | (required) | Initial SAM 3 concept prompt, e.g. `"a red mug"`. May be re-entered at the confirmation gate (see below). |
+| `camera_config` | string | `$(find bundlesdf_node)/config/camera_input.yaml` | YAML of input/output topic names, loaded under `/camera_input`. |
 | `~model_id` | string | `facebook/sam3` | Hugging Face model id. |
+| `~check_segmentation` | bool | `true` | Show the debug window and gate mask publishing on user confirmation. Set `false` to publish immediately (legacy behavior). |
+
+## Confirmation gate
+
+With `check_segmentation` (default), no mask is published until the user
+accepts the current segmentation, so the downstream `bundlesdf_node` does not
+start pose estimation on a bad prompt. The debug window keeps showing the live
+segmentation while the launch terminal prompts on stdin:
+
+- `Accept segmentation? [y/n]:` — answer `y` to start publishing (from then on
+  the node runs normally and never prompts again).
+- Answer `n` to enter a `New object prompt:`; the SAM 3 session is rebuilt with
+  the new prompt and the gate stays closed, so `~text_prompt` is only an initial
+  value that can be replaced without relaunching.
+
+The launch nodes use `output="screen"`, so they inherit the `roslaunch`
+terminal's stdin and these prompts work under `roslaunch`.
 
 Initialization is text-prompt only by contract. bbox/point/mask init is not
 defined: the concept streaming API (`Sam3VideoModel` / `Sam3VideoProcessor`)
@@ -69,9 +91,16 @@ occasionally jump between candidates in cluttered scenes.
 
 ```bash
 roslaunch sam3_segmenter sam3_segmenter.launch \
+  text_prompt:="a red mug"
+```
+
+The input RGB and output mask topics come from `camera_input.yaml` (see the
+`bundlesdf_node` README). Point `camera_config` at another YAML to override:
+
+```bash
+roslaunch sam3_segmenter sam3_segmenter.launch \
   text_prompt:="a red mug" \
-  image_in:=/camera/color/image_raw \
-  mask_out:=/sam3/mask
+  camera_config:=/path/to/my_camera.yaml
 ```
 
 ## Verification status

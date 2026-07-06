@@ -5,27 +5,24 @@
   <arg name="use_segmenter" default="true" />
   <arg name="target_object" default="object" />
 
-  <arg name="rgb_in" default="/d455_1/color/image_rect" />
-  <arg name="depth_in" default="/d455_1/aligned_depth_to_color/image_raw" />
-  <arg name="camera_info_in" default="/d455_1/color/camera_info_rect" />
-  <arg name="mask_topic" default="/sam3/mask" />
+  <arg name="camera_config" default="$(find bundlesdf_node)/config/camera_input.yaml" />
   <arg name="target_frame" default="tracked_object" />
   <arg name="out_folder" default="/tmp/bundlesdf_online" />
   <arg name="debug_level" default="1" />
+  <arg name="use_gui" default="false" />
+  <arg name="check_segmentation" default="true" />
 
   <include file="$(find sam3_segmenter)/launch/sam3_segmenter.launch" if="$(arg use_segmenter)">
     <arg name="text_prompt" value="$(arg target_object)" />
-    <arg name="image_in" value="$(arg rgb_in)" />
-    <arg name="mask_out" value="$(arg mask_topic)" />
+    <arg name="camera_config" value="$(arg camera_config)" />
+    <arg name="check_segmentation" value="$(arg check_segmentation)" />
   </include>
 
   <include file="$(find bundlesdf_node)/launch/bundlesdf_node.launch">
-    <arg name="rgb_in" value="$(arg rgb_in)" />
-    <arg name="depth_in" value="$(arg depth_in)" />
-    <arg name="camera_info_in" value="$(arg camera_info_in)" />
-    <arg name="mask_in" value="$(arg mask_topic)" />
+    <arg name="camera_config" value="$(arg camera_config)" />
     <arg name="target_frame" value="$(arg target_frame)" />
     <arg name="out_folder" value="$(arg out_folder)" />
     <arg name="debug_level" value="$(arg debug_level)" />
+    <arg name="use_gui" value="$(arg use_gui)" />
   </include>
 </launch>

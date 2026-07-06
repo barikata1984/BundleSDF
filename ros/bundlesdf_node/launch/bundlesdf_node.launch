@@ -1,20 +1,17 @@
 <launch>
-  <arg name="rgb_in" default="/d455_1/color/image_rect" />
-  <arg name="depth_in" default="/d455_1/aligned_depth_to_color/image_raw" />
-  <arg name="camera_info_in" default="/d455_1/color/camera_info_rect" />
-  <arg name="mask_in" default="/sam3/mask" />
+  <arg name="camera_config" default="$(find bundlesdf_node)/config/camera_input.yaml" />
   <arg name="target_frame" default="tracked_object" />
   <arg name="out_folder" default="/tmp/bundlesdf_online" />
   <arg name="debug_level" default="1" />
+  <arg name="use_gui" default="false" />
+
+  <rosparam file="$(arg camera_config)" command="load" ns="camera_input" />
 
   <node pkg="bundlesdf_node" type="bundlesdf_node.py" name="bundlesdf_node"
         output="screen">
     <param name="target_frame" value="$(arg target_frame)" />
     <param name="out_folder" value="$(arg out_folder)" />
     <param name="debug_level" value="$(arg debug_level)" />
-    <remap from="~rgb_in" to="$(arg rgb_in)" />
-    <remap from="~depth_in" to="$(arg depth_in)" />
-    <remap from="~camera_info_in" to="$(arg camera_info_in)" />
-    <remap from="~mask_in" to="$(arg mask_in)" />
+    <param name="use_gui" value="$(arg use_gui)" />
   </node>
 </launch>

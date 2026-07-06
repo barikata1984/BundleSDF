@@ -1,0 +1,4 @@
+rgb_in: /d455_1/color/image_rect
+depth_in: /d455_1/aligned_depth_to_color/image_raw
+camera_info_in: /d455_1/color/camera_info_rect
+mask_topic: /sam3/mask
