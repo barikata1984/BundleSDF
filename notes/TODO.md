@@ -92,6 +92,10 @@
 - [ ] `docker/ros-one.dockerfile` の `opencv-python` バージョン固定 (`opencv-python==4.11.0.86` + `numpy==1.26.4`). 現状バージョン指定なしで, 次回イメージビルド時に Qt `imshow` バグを持つ既知の不具合版 (`5.0.0.93`) が入ってしまう. 提案済みだがユーザー承認待ちで未着手
 - [ ] `sam3_segmenter` のゲートプロンプト ("Accept segmentation? [y/n]:") の表示タイミングが不可解な問題の根本原因特定. 実機での目視では「何か入力して Enter を押すまで画面に反映されないように見える」という報告があった. `print(prompt, flush=True)` + プロンプトなし `input()` への変更を一度試みたが対症療法との指摘を受け撤回済み (コードは元の `input("Accept segmentation? [y/n]: ")` に復元済み). 標準出力バッファリングか, callback スレッドのログ出力との表示競合か, 他要因かは未特定
 
+## 完了 (2026-07-06 追加, 続き: ROS パッケージ名リネーム)
+
+- [x] ROS パッケージ名を `bundlesdf_node` から `bundlesdf` へ全面リネーム (ノード名 `bundlesdf_node`・トピック名 `/bundlesdf_node/object_pose` は変更せず維持. パッケージ名とノード名は独立した概念であるため意図的に据え置いた). `git mv ros/bundlesdf_node ros/bundlesdf` でディレクトリを履歴保持したままリネームし, `package.xml` の `<name>`, `CMakeLists.txt` の `project()`, 3つの launch ファイル (`bundlesdf.launch`/`bundlesdf_node.launch`/`sam3_segmenter.launch`) 内の `pkg="bundlesdf_node"`/`$(find bundlesdf_node)`, 両パッケージの `README.md` のコマンド例を `bundlesdf` に更新した. `catkin_ws/src` のシンボリックリンクも張り替え, `catkin_make` を再実行して `rospack find bundlesdf` の解決 (`rospack find bundlesdf_node` は解決しないこと含め) を確認済み
+
 ## 保留中 (実機検証待ち)
 
 - [ ] SAM3 セグメンターのノード統合是非の判断 (2026-07-03, 検討のみ・実装なし). ユーザーから「SAM3 を別ノードにしなくてよいのでは (コンテナは既に統合済みで, オリジナル実装もセグメンター内蔵設計のはず)」という提案があり検討した. 事実確認: コンテナは `f8a0428` で jammy 単一イメージに統合済み (元は python3.10 バージョン競合で分離), オリジナルの `run_custom.py` は `Segmenter()` を直接インスタンス化する内蔵設計, 現状は `sam3_segmenter_node.py`/`bundlesdf_node.py` 間を `message_filters` の time-synchronized subscribe (`slop=0.05`) で繋ぐ別ノード構成のまま. トレードオフ: 統合はタイムスタンプずれによるフレーム取りこぼしリスク (未検証の同期購読機構) を構造的に解消できる一方, セグメンテーションバックエンドの差し替え可能性 (疎結合性) と ROS ノード分離による障害分離のメリットを失う. 折衷案として「同一プロセス内で関数呼び出しするが実装はインターフェースとして差し替え可能にする」設計を提案した. **結論: 実機検証がまだ行われていない段階での判断はリスクが高いため, まず実機で動かして同期ずれが実際に問題になるかを見てから統合可否を判断する方針とした**. 判断保留の経緯は `notes/LOGS/log_ros_one_migration.md` (2026-07-03) 参照

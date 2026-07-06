@@ -698,3 +698,19 @@ BundleTrack の C++ 拡張 (`BundleTrack/build/my_cpp.cpython-310-*.so`, `mycuda
 ### 未解決事項
 
 ゲートプロンプト ("Accept segmentation? [y/n]:") の表示タイミングが不可解という報告があった. 実機での目視では, 何か入力して Enter を押すまでプロンプトが画面に反映されないように見えるとのことである. `print(prompt, flush=True)` + プロンプトなし `input()` への変更を一度試みたが, ユーザーから「診断が不十分な対症療法ではないか」との指摘を受け撤回した (コードは元の `input("Accept segmentation? [y/n]: ")` に戻っている). 標準出力バッファリングなのか, callback スレッドのログ出力との表示競合なのか, 他の要因なのかは未特定のままであり, `notes/ISSUES.md`/`notes/TODO.md` に次回セッションの課題として追加した.
+
+## 2026-07-06 (続き): ROS パッケージ名を `bundlesdf_node` から `bundlesdf` へリネーム
+
+上記一連の launch 制御機能追加・カメラトピック一元化の作業を終えた後, ROS パッケージ名を `bundlesdf_node` から `bundlesdf` にリネームした. パッケージ名がノード名 (`bundlesdf_node`) と同名だったことが紛らわしかったための整理であり, ノード名 `rospy.init_node('bundlesdf_node')` とそれに伴うトピック名 (`/bundlesdf_node/object_pose` 等) はパッケージ名とは独立した概念であるため意図的に変更していない.
+
+`git mv ros/bundlesdf_node ros/bundlesdf` でディレクトリを履歴保持したままリネームし, 次を更新した: `ros/bundlesdf/package.xml` の `<name>`, `ros/bundlesdf/CMakeLists.txt` の `project()`, 3つの launch ファイル (`ros/bundlesdf/launch/bundlesdf_node.launch`, `ros/bundlesdf/launch/bundlesdf.launch`, `ros/sam3_segmenter/launch/sam3_segmenter.launch`) 内の `pkg="bundlesdf_node"`/`$(find bundlesdf_node)` 参照, `ros/bundlesdf/README.md`/`ros/sam3_segmenter/README.md` の `roslaunch bundlesdf_node ...` 等のコマンド例. launch ファイル名 `bundlesdf_node.launch` 自体, `type="bundlesdf_node.py"`, ノード名 `name="bundlesdf_node"` はいずれもパッケージ名ではなくファイル名・ノード名であるため変更していない. `catkin_ws/src` 内のシンボリックリンクを `bundlesdf_node` → `bundlesdf` に張り替え, `catkin_ws/build`/`devel` を作り直して `catkin_make` を再実行し, `rospack find bundlesdf` が解決すること (`rospack find bundlesdf_node` は解決しないこと含め) を確認した.
+
+### 既知問題の再現1: `catkin_make` 実行のたびに `project()` が書き換わる事象
+
+リネーム作業中, `catkin_make` を複数回実行した際に `ros/bundlesdf/CMakeLists.txt` の `project(bundlesdf)` が意図せず `project(bundlesdf_node)` に (リネーム前の名残として) 書き換わる事象が2回発生した. 調査したところ, `catkin_make` 実行直後にファイル内容を確認すると正しい値 (`project(bundlesdf)`) のままであり, `catkin_make` 自体がこの書き換えを起こしている証拠は見つからなかった. VSCode + CMake Tools 拡張機能がファイルを開いた際に (CMake Tools のキャッシュか設定ファイルに残っていた古いプロジェクト名を使って) 自動的に書き換えている可能性が高いと判断したが, 未確定である. 実害は都度手動で `project()` を直せば済むレベルであり, 恒久対処は行っていない.
+
+### 既知問題の再現2: `catkin_ws/src` への直接シンボリックリンクによる実ソースツリー汚染
+
+リネーム作業中, `catkin_make` 実行時にワークスペース管理用ファイル (トップレベル `CMakeLists.txt`) や自己参照シンボリックリンク (`ros/ros`) が実ソースツリー (`ros/` 配下) 内に誤って生成される事故が再度発生した. これは 2026-07-05 の項 (「catkin_make が実ソースツリー内 (`ros/CMakeLists.txt`) に環境依存のシンボリックリンクを誤って作成していたことに気づき, これは削除した」) と同一の根本原因であり, 今回改めて原因を特定した: 当時の `catkin_ws/src` は `ros/` ディレクトリ全体への直接シンボリックリンク (`catkin_ws/src -> /workspace/ros`) だったため, `catkin_make` が `catkin_ws/src` 配下に書き込むワークスペース管理ファイル (トップレベル `CMakeLists.txt` 等) がそのまま実ソースツリー `ros/` 直下に書き込まれてしまい, さらに `ros/` 自身への自己参照シンボリックリンク (`ros/ros`) まで生成されていた.
+
+恒久修正として, `catkin_ws/src` を `ros/` 全体への単一シンボリックリンクではなく, 実ディレクトリ化した上で `bundlesdf`/`sam3_segmenter` それぞれへの個別パッケージ単位のシンボリックリンクを配置する構成に変更した (`catkin_ws/src/bundlesdf -> /workspace/ros/bundlesdf`, `catkin_ws/src/sam3_segmenter -> /workspace/ros/sam3_segmenter`, `catkin_ws/src/CMakeLists.txt -> /opt/ros/one/share/catkin/cmake/toplevel.cmake` はワークスペース管理用の別シンボリックリンクとして正しい場所に存在). この構成では `catkin_make` の書き込みが `catkin_ws/src` 配下 (実ディレクトリ) にとどまり, リンク先の実ソースツリー `ros/` を汚染しない. 変更後の `catkin_make` 再実行で `ros/CMakeLists.txt`/`ros/ros` が再発生しないことを確認した.
