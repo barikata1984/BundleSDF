@@ -40,6 +40,17 @@ services:
       # Claude Code: share user-level config; auth stays per-container;
       # session history persists across rebuild via the 4 mounts below.
       # ros-one.dockerfile has no non-root user, so target /root/.claude.
+      # NOTE: intentionally per-file/per-dir, NOT a whole-directory mount of
+      # ~/.claude -- that directory is the host's personal Claude Code home
+      # (git-tracked dotfiles repo, MCP tokens in mcp.json, session-env/
+      # captures, cross-project file-history/tasks/teams/notes/etc.) and
+      # must not be exposed wholesale. A per-file mount does pin the host
+      # inode, so a host-side atomic-write replace (e.g. Claude Code's own
+      # Edit/Write tool) can leave settings.json/statusline-command.sh/etc.
+      # stale until the container is recreated -- accepted as the lesser
+      # risk versus leaking credentials/session-env/other-project content.
+      # Check staleness with: findmnt -T /root/.claude/settings.json
+      # (SOURCE ending in "//deleted" means it's stale; recreate to fix).
       - ${HOME}/.claude/CLAUDE.md:/root/.claude/CLAUDE.md
       - ${HOME}/.claude/skills:/root/.claude/skills
       - ${HOME}/.claude/agents:/root/.claude/agents
