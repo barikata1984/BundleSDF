@@ -714,3 +714,21 @@ BundleTrack の C++ 拡張 (`BundleTrack/build/my_cpp.cpython-310-*.so`, `mycuda
 リネーム作業中, `catkin_make` 実行時にワークスペース管理用ファイル (トップレベル `CMakeLists.txt`) や自己参照シンボリックリンク (`ros/ros`) が実ソースツリー (`ros/` 配下) 内に誤って生成される事故が再度発生した. これは 2026-07-05 の項 (「catkin_make が実ソースツリー内 (`ros/CMakeLists.txt`) に環境依存のシンボリックリンクを誤って作成していたことに気づき, これは削除した」) と同一の根本原因であり, 今回改めて原因を特定した: 当時の `catkin_ws/src` は `ros/` ディレクトリ全体への直接シンボリックリンク (`catkin_ws/src -> /workspace/ros`) だったため, `catkin_make` が `catkin_ws/src` 配下に書き込むワークスペース管理ファイル (トップレベル `CMakeLists.txt` 等) がそのまま実ソースツリー `ros/` 直下に書き込まれてしまい, さらに `ros/` 自身への自己参照シンボリックリンク (`ros/ros`) まで生成されていた.
 
 恒久修正として, `catkin_ws/src` を `ros/` 全体への単一シンボリックリンクではなく, 実ディレクトリ化した上で `bundlesdf`/`sam3_segmenter` それぞれへの個別パッケージ単位のシンボリックリンクを配置する構成に変更した (`catkin_ws/src/bundlesdf -> /workspace/ros/bundlesdf`, `catkin_ws/src/sam3_segmenter -> /workspace/ros/sam3_segmenter`, `catkin_ws/src/CMakeLists.txt -> /opt/ros/one/share/catkin/cmake/toplevel.cmake` はワークスペース管理用の別シンボリックリンクとして正しい場所に存在). この構成では `catkin_make` の書き込みが `catkin_ws/src` 配下 (実ディレクトリ) にとどまり, リンク先の実ソースツリー `ros/` を汚染しない. 変更後の `catkin_make` 再実行で `ros/CMakeLists.txt`/`ros/ros` が再発生しないことを確認した.
+
+## 2026-07-06 (続き): トップレベル readme.md の改定
+
+上記一連の作業 (launch 制御機能・カメラトピック一元化・パッケージ名リネーム) を終えた後, トップレベルの `/workspace/readme.md` を現状のプロジェクト構成に合わせて改定した. writer サブエージェントにドラフトを作成させ, main agent が既存ファイルとの差分を検証した上で `Edit` ツールで反映した (アップストリーム部分を巻き込まないよう, 変更箇所のみの差分編集で行った).
+
+変更点は次の4つである.
+
+**"Changes over upstream" への `ros/bundlesdf/` 追加**。これまで README には `ros/sam3_segmenter/` (SAM 3 セグメンター) への言及はあったが, 肝心の BundleSDF 本体を ROS ノード化した `ros/bundlesdf/` (本セッション前半で `bundlesdf_node` からリネーム済み) への言及が一切なく, この欠落を埋めた.
+
+**"Build" セクションの docker-compose ベースへの更新**。旧来の `docker build -f docker/ros-one.dockerfile ...`/`docker run -d --name bundlesdf_bench ...` という手順は, 実際には `docker/docker-compose.yml` の単一サービス `bundlesdf` を使う運用 (`docker compose build`/`up -d`/`exec bundlesdf ...`) に既に移行していたにもかかわらず README には反映されていなかった. あわせて, VS Code Dev Containers 拡張 (`.devcontainer/devcontainer.json`) でも同じ `docker-compose.yml` にそのまま接続できる旨を追記した.
+
+**catkin ワークスペースのビルド手順を新規セクションとして追加**。`ros/bundlesdf`/`ros/sam3_segmenter` は catkin パッケージだが `.gitignore` 対象のローカルビルド成果物 (`catkin_ws/`) としてリポジトリには含まれておらず, 初回のみ手動セットアップ (`catkin_ws/src` にシンボリックリンクを張って `catkin_make`) が必要である旨と, `roslaunch bundlesdf bundlesdf.launch use_segmenter:=true target_object:="..."` という起動コマンド例, セグメンテーション確認ゲート・`use_gui`・`camera_config` の要点を追記した.
+
+**"Benchmark" セクションの更新**。`docker exec bundlesdf_bench ...` を `docker compose exec bundlesdf ...` に更新した.
+
+アップストリーム部分 (`---` 以下, 論文紹介・Abstract・Bibtex・データダウンロード・Docker/Environment setup [レガシー版]・Run on your custom data・Run on HO3D dataset・Acknowledgement・Contact) は一切変更していない.
+
+この過程で, `ros/bundlesdf/README.md` (パッケージ内 README) のタイトル行が `# bundlesdf_node` のままでパッケージ名 `bundlesdf` と不一致であることに気づいたが, 今回のトップレベル README 改定のスコープ外として意図的に変更していない (直前のパッケージ名リネーム作業でも同様に判断保留にした箇所, `notes/ISSUES.md` 参照).
