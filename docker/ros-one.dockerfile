@@ -119,8 +119,11 @@ ENV HF_HOME=/hf_cache
 
 RUN imageio_download_bin freeimage || true
 
-# Source ROS One in interactive shells
-RUN echo "source /opt/ros/one/setup.bash" >> /root/.bashrc
+# Source ROS One in interactive shells. catkin_ws is a local build artifact
+# (gitignored, created via `catkin_make` after the repo is mounted), so guard
+# on its existence rather than failing shells that haven't built it yet.
+RUN echo "source /opt/ros/one/setup.bash" >> /root/.bashrc && \
+    echo '[ -f /workspace/catkin_ws/devel/setup.bash ] && source /workspace/catkin_ws/devel/setup.bash' >> /root/.bashrc
 
 # CUDA MPS: start the control daemon before CMD, quit it gracefully on stop.
 COPY docker/mps-entrypoint.sh /usr/local/bin/mps-entrypoint.sh

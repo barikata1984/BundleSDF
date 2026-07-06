@@ -1,11 +1,17 @@
 {
   "AllAutocomplete.showCurrentDocument": false,
+  "explorer.excludeGitIgnore": false,
   "files.exclude": {
     "artifacts/": true,
     "data/": true,
     "exp/": true,
     "sacred/": true,
-    "wandb/": true
+    "wandb/": true,
+    "**/__pycache__": true,
+    ".ruff_cache": true,
+    "BundleTrack/build": true,
+    "BundleTrack/LoFTR/weights": true,
+    "mycuda/*.so": true
   },
   "files.watcherExclude": {
     "artifacts/": true,
@@ -21,7 +27,6 @@
     "sacred/": true,
     "wandb/": true
   },
-  "explorer.excludeGitIgnore": true,
   "files.associations": {
     "*.cu": "cpp",
     "*.cuh": "cpp",
