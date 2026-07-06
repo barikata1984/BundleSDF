@@ -636,3 +636,65 @@ set2 実行中, MPM10 delay=3 の CUDA クラッシュ (illegal memory access) �
 `notes/TODO.md` の該当タスクを完了 `[x]` にし結果概要を追記した. `notes/ISSUES.md` に上記2件のインシデント (未解決) を新規追加した. `notes/PLAN_delay_accuracy_sweep.md` の「未決事項」「方針転換による中断」の記述に, 本セッションでの完了を反映した.
 
 なお, `notes/PERF_plan.md`/`notes/TODO.md` に残っていた「MPS 恒久化は Docker の実ビルド・コンテナ再起動が未実施」という記述は, 実際のコンテナ環境を再調査した結果, 既に完了・稼働中であることが確認済みであり (2026-07-04 訂正, 本ログ参照), 現在の記述は正しい状態のまま変更していない.
+
+## 2026-07-06 (続き): launch 経由の GUI/デバッグ制御, カメラトピック一元化, デッドロック修正, セグメンテーション確認ゲート, SIGSEGV 修正
+
+### launch からの GUI 制御
+
+`bundlesdf_node.py` は `use_gui=False` を `BundleSdf(...)` 呼び出しにハードコードしていた. `rospy.get_param('~use_gui', False)` に変更し, `bundlesdf_node.launch`/`bundlesdf.launch` に `use_gui` arg を追加した. 既定値は従来どおり `false` であり, 挙動は変えていない.
+
+### sam3_segmenter のデバッグウィンドウ表示を launch から制御可能に
+
+既存の `~debug_view` パラメータ名は, 実際にはユーザーがセグメンテーション結果を目視確認するための機能であるという実態をより正確に表す `~check_segmentation` にリネームした. `sam3_segmenter.launch`/`bundlesdf.launch` に対応する arg を追加した.
+
+### カメラ入力トピック名の共有 YAML 設定への一元化
+
+これまで `bundlesdf_node.py`/`sam3_segmenter_node.py` はそれぞれ private remap (`~rgb_in`/`~depth_in`/`~camera_info_in`/`~mask_in`, `~image_in`/`~mask_out`) でトピック名を受け取っており, 両ノードで同じトピック名を渡すには launch ファイル側で同じ文字列を2箇所以上に重複して書く必要があった. `ros/bundlesdf_node/config/camera_input.yaml` を新規作成し (`rgb_in`/`depth_in`/`camera_info_in`/`mask_topic` の4キー), 両ノードとも `rospy.get_param('/camera_input/...')` でトピック名をグローバル名前空間から取得する方式に変更した. 3つの launch ファイル (`bundlesdf_node.launch`/`sam3_segmenter.launch`/`bundlesdf.launch`) は `camera_config` arg (既定 `$(find bundlesdf_node)/config/camera_input.yaml`) + `<rosparam ns="camera_input">` でこの YAML を読み込む方式に統一した.
+
+### 重大バグ (FTA): sam3_segmenter のデバッグ表示が callback スレッドをデッドロックさせ, パイプライン全体が沈黙する
+
+`check_segmentation` 機能追加の実機テスト中, `bundlesdf_node` が起動していても object_pose も TF も一切publishされない (エラーも出ない) 事象に遭遇した. Fault Tree Analysis で調査した.
+
+`py-spy dump` でコールバックスレッドのスタックを確認したところ, `show_debug()` 内の `cv2.imshow` で永久に停止していた. 原因は, `sam3_segmenter_node.py` の `callback()` (ROS Subscriber のコールバック, メインスレッドではない) から直接 `cv2.imshow`/`cv2.waitKey` を呼んでいたことにある. OpenCV の Qt バックエンドは GUI 操作を `Qt::BlockingQueuedConnection` で GUI メインスレッドに委譲するが, サブスクライバのコールバックスレッドは Qt のイベントループを回す GUI メインスレッドではないため, 委譲が永久に完了せずデッドロックする.
+
+このデッドロックは連鎖的な障害を引き起こしていた. コールバックスレッドが最初のフレームで停止する → mask が一度も publish されない → 下流の `bundlesdf_node` の `ApproximateTimeSynchronizer` (rgb/depth/mask の3トピック同期) が一度も成立しない → `on_frame()` が一度も呼ばれず, object_pose も TF も一切出力されない, という経路である. エラーメッセージが一切出ない (デッドロックはスレッドが停止するだけで例外を送出しない) ため, 一見するとどこにも問題がないように見えた点が発見を難しくしていた.
+
+修正は, `callback()` からは `cv2.imshow`/`cv2.waitKey` の呼び出しを完全に排除し, `self.debug_lock` で保護した共有変数 (`self.debug_frame`) に最新フレームを書き込むだけにした. `cv2.imshow`/`cv2.waitKey` は `main()` のメインスレッドが回す `rospy.Rate(30)` ループの中でのみ呼ぶように変更し, そこで `self.debug_frame` を読み出して表示する. GUI 操作をメインスレッドに限定することで Qt の委譲問題自体を回避する設計である.
+
+### セグメンテーション確認ゲート機能の実装
+
+bundlesdf の姿勢推定を開始する前に, ユーザーがセグメンテーション結果 (どの物体をマスクしているか) を目視確認してから追跡を始められるようにするゲート機能を `sam3_segmenter_node.py` に実装した.
+
+`check_segmentation` が有効なとき, mask の publish は `self.accepted` フラグが立つまで保留される (推論・デバッグ表示は毎フレーム継続するが, `self.pub.publish(...)` だけがスキップされる). 別スレッドで動く `gate_loop()` が標準入力をブロッキングで読み, "Accept segmentation? [y/n]:" に `y` と答えると `self.accepted = True` にしてゲートを開き, `n` と答えると "New object prompt:" で新しいテキストプロンプトを再入力させ, SAM3 session (`init_video_session` + `add_text_prompt`) を新しいプロンプトで再構築してゲートを再度閉じる (誤った物体を追跡し続けないようにするため).
+
+標準入力の扱いについては, `roslaunch` の stdin が起動したノードプロセスに正しく継承されることを実機で確認済みである (ROS ターミナルで `roslaunch` した場合, 対話的な `input()` がそのターミナルに正しく表示・入力できる).
+
+排他制御は2つのロックに分離した. `self.session_lock` は `self.session`/`self.text_prompt`/`self.accepted` を保護し, callback スレッドの推論実行中に gate スレッドがセッションを差し替えてしまう競合を防ぐ. 表示専用の `self.debug_frame` は別の `self.debug_lock` で保護し, セッション操作とは独立してロックの粒度を分けた (表示更新がセッション再構築を待たされる, あるいはその逆の不要な直列化を避けるため).
+
+### 重大バグ (FTA): ゲート機能実装後の実機テストで bundlesdf_node が SIGSEGV
+
+ゲート機能実装後の実機テストで, `bundlesdf_node` が exit code -11 (SIGSEGV) でクラッシュする事象が発生した. Fault Tree Analysis で調査した.
+
+根本原因は, 本セッション前半で行った別の調査 (opencv-python の Qt バグ, `5.0.0.93` で `imshow` が `QMetaObject::invokeMethod: No such method GuiReceiver::showImage` エラーを出す既知の不具合) への対処として `pip install opencv-python==4.13.0.92` を実行した際, pip の依存解決が `numpy` を `docker/ros-one.dockerfile` の意図的な固定値 `1.26.4` から `2.2.6` へ強制アップグレードしたまま, 元の `1.26.4` に戻し忘れていたことにある.
+
+BundleTrack の C++ 拡張 (`BundleTrack/build/my_cpp.cpython-310-*.so`, `mycuda/*.so`) はいずれも numpy 1.26.4 の環境でビルド済みである. `my_cpp.Frame(color, depth, ...)` が Python 側から numpy 配列を受け取る際, numpy 2.x で変更された C-API の ABI と, 1.26.4 でコンパイルされた拡張側の期待が噛み合わずクラッシュしていた.
+
+`my_cpp.Frame(...)` を単体で直接呼ぶ最小再現コード (numpy 2.2.6 環境下で色・深度配列を渡すだけ) で確実に SIGSEGV を再現し, 原因を確定した.
+
+修正は, `opencv-python==4.11.0.86` (`numpy<2` を要求する最新版で, 事前調査していた Qt `imshow` バグも再発しないことを確認済み) と `numpy==1.26.4` に戻すことで行った. **この修復は現在稼働中のコンテナ環境への pip による一時対応であり, `docker/ros-one.dockerfile` 側の `opencv-python` (バージョン指定なし) はまだ修正していない**. 次回イメージビルド時には最新版 (`5.0.0.93`) が入り, Qt デッドロックバグが再発する懸念が残っている. Dockerfile 側の `opencv-python==4.11.0.86` 固定を提案したが, ユーザーの承認待ちで未着手のまま `notes/ISSUES.md` に追加した.
+
+### catkin_ws が VSCode エクスプローラーに見えない問題の調査
+
+`catkin_ws/` ディレクトリがエディタのファイルエクスプローラーから見えないという指摘があり調査した. `catkin_ws/` は `.gitignore` 対象のローカルビルド成果物であり (Dockerfile にはワークスペースを自動ビルドする手順がなく, `catkin_make` は手動実行が前提), ディレクトリ自体はファイルシステム上に実在していた. 見えなかった原因は `.vscode/settings.json` の `explorer.excludeGitIgnore: true` が, gitignore 対象を丸ごとエクスプローラーから隠していたことにある.
+
+対応として `explorer.excludeGitIgnore` を無効化し, 代わりに実在する主要ノイズ (`**/__pycache__`, `.ruff_cache`, `BundleTrack/build`, `BundleTrack/LoFTR/weights`, `mycuda/*.so`) だけを `files.exclude` で個別に隠す方式に変更した. あわせて, `docker/ros-one.dockerfile` の `.bashrc` 自動 source 設定に, `catkin_ws/devel/setup.bash` の存在チェック付き source を追加した (`catkin_make` 未実行の環境でシェル起動が壊れないようにするガードである).
+
+### TF 設計の妥当性確認
+
+`bundlesdf_node.py` の `publish_pose()` は, 推定した物体姿勢を `d455_1_color_optical_frame` (カメラ座標系) を親フレームとして TF に配信している. この設計 (ロボットのベースフレームではなくカメラフレームを親にする) が妥当かどうかを `tf2_ros` で実機確認した.
+
+このカメラフレームは, `robot_state_publisher` が配信する UR ロボットの TF ツリー (ハンドアイキャリブレーション済み) を経由して `base`/`base_link` まで到達可能であることを確認した. カメラ座標系で観測した姿勢をそのままカメラフレーム基準で publish し, ロボットベース基準への変換は TF ツリーを辿る側 (制御側) に委ねるという設計は, TF の標準的な設計思想 (センサはセンサ自身のフレームで観測を配信し, フレーム間の変換は tf2 に任せる) に合致しており, 問題ないと判断した.
+
+### 未解決事項
+
+ゲートプロンプト ("Accept segmentation? [y/n]:") の表示タイミングが不可解という報告があった. 実機での目視では, 何か入力して Enter を押すまでプロンプトが画面に反映されないように見えるとのことである. `print(prompt, flush=True)` + プロンプトなし `input()` への変更を一度試みたが, ユーザーから「診断が不十分な対症療法ではないか」との指摘を受け撤回した (コードは元の `input("Accept segmentation? [y/n]: ")` に戻っている). 標準出力バッファリングなのか, callback スレッドのログ出力との表示競合なのか, 他の要因なのかは未特定のままであり, `notes/ISSUES.md`/`notes/TODO.md` に次回セッションの課題として追加した.
